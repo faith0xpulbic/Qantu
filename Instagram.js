@@ -1,0 +1,85 @@
+const axios = require('axios');
+const { getSession, updateSession, addMessage } = require('./sessions');
+const { processMessage } = require('./bot');
+const { pingOwner } = require('./whatsapp');
+
+const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN || process.env.WHATSAPP_TOKEN;
+const INSTAGRAM_PAGE_ID = process.env.INSTAGRAM_PAGE_ID;
+
+const API_URL = `https://graph.facebook.com/v20.0/${INSTAGRAM_PAGE_ID}/messages`;
+
+async function sendInstagramMessage(recipientId, text) {
+  try {
+    await axios.post(
+      API_URL,
+      {
+        recipient: { id: recipientId },
+        message: { text },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${INSTAGRAM_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (err) {
+    console.error('Error sending Instagram message:', err.response?.data || err.message);
+  }
+}
+
+async function handleIncomingInstagramMessage(body) {
+  const entry = body.entry?.[0];
+  const messaging = entry?.messaging?.[0];
+
+  if (!messaging || !messaging.message) return;
+  if (messaging.message.is_echo) return;
+
+  const fromId = messaging.sender.id;
+  const text = messaging.message.text || null;
+
+  // Instagram can also receive image attachments
+  const hasAttachment = messaging.message.attachments?.length > 0;
+  const mediaUrl = hasAttachment ? messaging.message.attachments[0].payload?.url : null;
+
+  if (!text && !mediaUrl) {
+    console.log('Received unsupported Instagram message type, skipping');
+    return;
+  }
+
+  console.log(`Instagram from ${fromId}: ${text || '[attachment]'}`);
+
+  const sessionId = `ig_${fromId}`;
+  const session = getSession(sessionId);
+  updateSession(sessionId, { channel: 'instagram' });
+
+  const customerContent = mediaUrl
+    ? (text ? `[image] ${text}` : '[image]')
+    : text;
+  addMessage(sessionId, 'customer', customerContent);
+
+  const result = await processMessage(session, text, mediaUrl);
+
+  console.log(`Claude decision — action: ${result.action}, reason: ${result.action_reason}`);
+
+  await sendInstagramMessage(fromId, result.reply);
+  addMessage(sessionId, 'assistant', result.reply);
+
+  // All owner pings route to WhatsApp regardless of source channel
+  if (result.action === 'PING_OWNER' && result.owner_summary) {
+    await pingOwner(
+      `${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
+    );
+    updateSession(sessionId, { status: 'awaiting_owner' });
+  }
+
+  if (result.action === 'HANDOFF' && result.owner_summary) {
+    await pingOwner(
+      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram\n\nPlease take over this conversation directly.`
+    );
+    updateSession(sessionId, { status: 'handed_off' });
+  }
+}
+
+module.exports = { sendInstagramMessage, handleIncomingInstagramMessage };
+
