@@ -4,7 +4,7 @@ const { processMessage } = require('./bot');
 const { pingOwner } = require('./whatsapp');
 
 const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN || process.env.WHATSAPP_TOKEN;
-const INSTAGRAM_PAGE_ID = process.env.INSTAGRAM_PAGE_ID;
+const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_PAGE_ID;
 
 const API_URL = `https://graph.facebook.com/v20.0/${INSTAGRAM_PAGE_ID}/messages`;
 
