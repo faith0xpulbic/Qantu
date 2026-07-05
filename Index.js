@@ -15,6 +15,7 @@ app.get('/', (req, res) => {
   res.send('Bot server is running ✅');
 });
 
+// Webhook verification — Meta calls this once when you save the webhook URL
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -28,6 +29,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Incoming messages — WhatsApp and Instagram both POST here
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
