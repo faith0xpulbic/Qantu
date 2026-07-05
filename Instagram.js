@@ -1,12 +1,12 @@
 const axios = require('axios');
 const { getSession, updateSession, addMessage } = require('./sessions');
-const { processMessage } = require('./bot');
-const { pingOwner } = require('./whatsapp');
+const { processMessage } = require('./Bot');
+const { pingOwner } = require('./Whatsapp');
 
-const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN || process.env.WHATSAPP_TOKEN;
-const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_PAGE_ID;
+const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
+const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 
-const API_URL = `https://graph.facebook.com/v20.0/${INSTAGRAM_PAGE_ID}/messages`;
+const API_URL = `https://graph.facebook.com/v20.0/${INSTAGRAM_ACCOUNT_ID}/messages`;
 
 async function sendInstagramMessage(recipientId, text) {
   try {
@@ -38,7 +38,6 @@ async function handleIncomingInstagramMessage(body) {
   const fromId = messaging.sender.id;
   const text = messaging.message.text || null;
 
-  // Instagram can also receive image attachments
   const hasAttachment = messaging.message.attachments?.length > 0;
   const mediaUrl = hasAttachment ? messaging.message.attachments[0].payload?.url : null;
 
@@ -60,7 +59,7 @@ async function handleIncomingInstagramMessage(body) {
 
   const result = await processMessage(session, text, mediaUrl);
 
-  console.log(`Claude decision — action: ${result.action}, reason: ${result.action_reason}`);
+  console.log(`Bot decision — action: ${result.action}`);
 
   await sendInstagramMessage(fromId, result.reply);
   addMessage(sessionId, 'assistant', result.reply);
@@ -75,11 +74,10 @@ async function handleIncomingInstagramMessage(body) {
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
     await pingOwner(
-      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram\n\nPlease take over this conversation directly.`
+      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
     );
     updateSession(sessionId, { status: 'handed_off' });
   }
 }
 
 module.exports = { sendInstagramMessage, handleIncomingInstagramMessage };
-
