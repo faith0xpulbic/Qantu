@@ -6,11 +6,11 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const OWNER_NUMBER = process.env.OWNER_WHATSAPP_NUMBER;
 
-const API_URL = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
+const API_URL = `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`;
 
 async function sendWhatsAppMessage(toNumber, text) {
   try {
-    await axios.post(
+    const response = await axios.post(
       API_URL,
       {
         messaging_product: 'whatsapp',
@@ -25,6 +25,7 @@ async function sendWhatsAppMessage(toNumber, text) {
         },
       }
     );
+    console.log('WhatsApp send success:', JSON.stringify(response.data));
   } catch (err) {
     console.error('Error sending WhatsApp message:', err.response?.data || err.message);
   }
