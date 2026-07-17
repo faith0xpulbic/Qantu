@@ -1,12 +1,12 @@
 const axios = require('axios');
 const { getSession, updateSession, addMessage } = require('./sessions');
 const { processMessage } = require('./Bot');
-const { pingOwner } = require('./WhatsApp');
+const { pingOwner } = require('./Whatsapp');
 
 const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
 const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 
-const API_URL = `https://graph.facebook.com/v20.0/${INSTAGRAM_ACCOUNT_ID}/messages`;
+const API_URL = `https://graph.facebook.com/v25.0/${INSTAGRAM_ACCOUNT_ID}/messages`;
 
 async function sendInstagramMessage(recipientId, text) {
   try {
@@ -30,16 +30,24 @@ async function sendInstagramMessage(recipientId, text) {
 
 async function handleIncomingInstagramMessage(body) {
   const entry = body.entry?.[0];
-  const messaging = entry?.messaging?.[0];
 
-  if (!messaging || !messaging.message) return;
-  if (messaging.message.is_echo) return;
+  // Instagram 'messages' field payloads arrive as entry.changes[0].value
+  // (same shape as WhatsApp), NOT entry.messaging[0] like older Messenger webhooks.
+  const change = entry?.changes?.[0];
+  const value = change?.value;
 
-  const fromId = messaging.sender.id;
-  const text = messaging.message.text || null;
+  if (!value || !value.message) {
+    console.log('No Instagram message found in payload, skipping');
+    return;
+  }
 
-  const hasAttachment = messaging.message.attachments?.length > 0;
-  const mediaUrl = hasAttachment ? messaging.message.attachments[0].payload?.url : null;
+  if (value.message.is_echo) return;
+
+  const fromId = value.sender?.id;
+  const text = value.message.text || null;
+
+  const hasAttachment = value.message.attachments?.length > 0;
+  const mediaUrl = hasAttachment ? value.message.attachments[0].payload?.url : null;
 
   if (!text && !mediaUrl) {
     console.log('Received unsupported Instagram message type, skipping');
