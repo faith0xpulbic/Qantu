@@ -6,7 +6,7 @@ const { pingOwner } = require('./WhatsApp');
 const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
 const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 
-const API_URL = `https://graph.facebook.com/v25.0/${INSTAGRAM_ACCOUNT_ID}/messages`;
+const API_URL = `https://graph.instagram.com/v25.0/me/messages`;
 
 async function sendInstagramMessage(recipientId, text) {
   try {
