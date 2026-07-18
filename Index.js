@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 
-const { handleIncomingWhatsAppMessage } = require('./WhatsApp');
+const { handleIncomingWhatsAppMessage } = require('./Whatsapp');
 const { handleIncomingInstagramMessage } = require('./Instagram');
 
 const app = express();
@@ -11,8 +11,21 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 
-app.get('/', (req, res) => {
+const path = require('path');
+
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+app.get('/health', (req, res) => {
   res.send('Bot server is running ✅');
+});
+
+// Instagram Business Login redirect URL — placeholder for now.
+// Only used when a business owner connects their own Instagram account
+// via OAuth. Not required for basic message send/receive testing.
+app.get('/auth/instagram/callback', (req, res) => {
+  const code = req.query.code;
+  console.log('Instagram OAuth callback received, code:', code);
+  res.send('Instagram account connected. You can close this window.');
 });
 
 // Webhook verification — Meta calls this once when you save the webhook URL
