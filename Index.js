@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 
-const { handleIncomingWhatsAppMessage } = require('./WhatsApp');
+const { handleIncomingWhatsAppMessage } = require('./Whatsapp');
 const { handleIncomingInstagramMessage } = require('./Instagram');
 
 const app = express();
@@ -16,6 +16,10 @@ const path = require('path');
 const publicPath = path.join(__dirname, 'public');
 console.log('Serving static files from:', publicPath);
 app.use(express.static(publicPath));
+
+app.get('/privacy', (req, res) => {
+  res.sendFile(path.join(publicPath, 'privacy.html'));
+});
 
 app.get('/health', (req, res) => {
   res.send('Bot server is running ✅');
