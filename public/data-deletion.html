@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Deletion — Qantu</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --ink: #1A1D1B;
+    --paper: #F7F5F0;
+    --line: #D9D4C7;
+    --moss: #3F5240;
+    --moss-deep: #2A3A2C;
+    --clay: #B5654A;
+    --muted: #6B6A63;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--moss-deep); }
+
+  .wrap {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  header {
+    padding: 40px 0 28px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+  }
+
+  .mark-glyph {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    background: var(--moss-deep);
+    position: relative;
+    flex-shrink: 0;
+  }
+  .mark-glyph::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 10px; height: 10px;
+    border: 2px solid var(--paper);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    rotate: -45deg;
+  }
+
+  .mark-name {
+    font-family: 'Fraunces', serif;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  .back {
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .back:hover { color: var(--ink); }
+
+  main {
+    padding: 44px 0 64px;
+  }
+
+  .section-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--clay);
+    margin-bottom: 10px;
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .updated {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+    margin-bottom: 36px;
+  }
+
+  h2 {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    font-weight: 600;
+    margin-top: 30px;
+    margin-bottom: 8px;
+  }
+  h2:first-of-type { margin-top: 0; }
+
+  p, li {
+    font-size: 15px;
+    color: var(--muted);
+  }
+
+  ul, ol { padding-left: 20px; margin-top: 8px; }
+  li { margin-bottom: 8px; }
+
+  .steps {
+    list-style: none;
+    padding: 0;
+    margin-top: 16px;
+    counter-reset: step;
+  }
+  .steps li {
+    counter-increment: step;
+    display: flex;
+    gap: 14px;
+    padding: 14px 0;
+    border-top: 1px solid var(--line);
+    font-size: 15px;
+    color: var(--ink);
+  }
+  .steps li:first-child { border-top: none; }
+  .steps li::before {
+    content: counter(step);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+    color: var(--muted);
+  }
+
+  .card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--moss);
+    padding: 18px 20px;
+    margin-top: 16px;
+    font-size: 14.5px;
+  }
+  .card a { font-weight: 500; }
+
+  footer {
+    padding: 28px 0 48px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <a class="mark" href="/">
+      <div class="mark-glyph"></div>
+      <div class="mark-name">Qantu</div>
+    </a>
+    <a class="back" href="/">← Back to home</a>
+  </header>
+
+  <main>
+    <div class="section-tag">Your data</div>
+    <h1>Data Deletion</h1>
+    <div class="updated">Last updated — July 2026</div>
+
+    <h2>Requesting deletion of your data</h2>
+    <p>If you have messaged a business that uses Qantu on WhatsApp or Instagram, you can request that we delete the data we hold about you — including your name, contact details, and message history — at any time.</p>
+
+    <h2>How to request deletion</h2>
+    <ol class="steps">
+      <li>Send an email to <a href="mailto:hello@qantu.app">hello@qantu.app</a> with the subject line "Data Deletion Request"</li>
+      <li>Include the phone number or Instagram username you used to message the business, so we can locate your records</li>
+      <li>We will confirm your request and remove your data from our systems within 30 days</li>
+    </ol>
+
+    <div class="card">
+      Deleting your data will remove your conversation history from Qantu's systems. It does not delete messages stored directly within WhatsApp or Instagram themselves — those are governed by Meta's own data policies.
+    </div>
+
+    <h2>What gets deleted</h2>
+    <ul>
+      <li>Your name and contact information as stored in our system</li>
+      <li>The full content of conversations associated with your contact details</li>
+      <li>Any summaries or notes generated from your conversations</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>For any questions about this process, reach us at <a href="mailto:hello@qantu.app">hello@qantu.app</a>.</p>
+  </main>
+
+  <footer>
+    <span>© 2026 Qantu</span>
+    <span>hello@qantu.app</span>
+  </footer>
+</div>
+
+</body>
+</html>
