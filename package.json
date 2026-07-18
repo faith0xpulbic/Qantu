@@ -5,8 +5,8 @@
   "main": "src/Index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/Index.js",
-    "dev": "node --watch src/Index.js"
+    "start": "node Index.js",
+    "dev": "node --watch Index.js"
   },
   "dependencies": {
     "express": "^4.19.2",
