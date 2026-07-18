@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -19,6 +20,14 @@ app.use(express.static(publicPath));
 
 app.get('/privacy', (req, res) => {
   res.sendFile(path.join(publicPath, 'privacy.html'));
+});
+
+app.get('/terms', (req, res) => {
+  res.sendFile(path.join(publicPath, 'terms.html'));
+});
+
+app.get('/data-deletion', (req, res) => {
+  res.sendFile(path.join(publicPath, 'data-deletion.html'));
 });
 
 app.get('/health', (req, res) => {
