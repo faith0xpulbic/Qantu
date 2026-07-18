@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terms of Service — Qantu</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --ink: #1A1D1B;
+    --paper: #F7F5F0;
+    --line: #D9D4C7;
+    --moss: #3F5240;
+    --moss-deep: #2A3A2C;
+    --clay: #B5654A;
+    --muted: #6B6A63;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--moss-deep); }
+
+  .wrap {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  header {
+    padding: 40px 0 28px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+  }
+
+  .mark-glyph {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    background: var(--moss-deep);
+    position: relative;
+    flex-shrink: 0;
+  }
+  .mark-glyph::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 10px; height: 10px;
+    border: 2px solid var(--paper);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    rotate: -45deg;
+  }
+
+  .mark-name {
+    font-family: 'Fraunces', serif;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  .back {
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .back:hover { color: var(--ink); }
+
+  main {
+    padding: 44px 0 64px;
+  }
+
+  .section-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--clay);
+    margin-bottom: 10px;
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .updated {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+    margin-bottom: 36px;
+  }
+
+  h2 {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    font-weight: 600;
+    margin-top: 30px;
+    margin-bottom: 8px;
+  }
+  h2:first-of-type { margin-top: 0; }
+
+  p, li {
+    font-size: 15px;
+    color: var(--muted);
+  }
+
+  ul { padding-left: 20px; margin-top: 8px; }
+  li { margin-bottom: 5px; }
+
+  footer {
+    padding: 28px 0 48px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <a class="mark" href="/">
+      <div class="mark-glyph"></div>
+      <div class="mark-name">Qantu</div>
+    </a>
+    <a class="back" href="/">← Back to home</a>
+  </header>
+
+  <main>
+    <div class="section-tag">Legal</div>
+    <h1>Terms of Service</h1>
+    <div class="updated">Last updated — July 2026</div>
+
+    <h2>Agreement to terms</h2>
+    <p>By using Qantu, either as a business connecting your WhatsApp or Instagram account, or as a customer messaging a business that uses Qantu, you agree to these Terms of Service.</p>
+
+    <h2>What Qantu provides</h2>
+    <p>Qantu is a messaging assistant that helps businesses respond to customer inquiries on WhatsApp and Instagram. It reads incoming messages, replies on the business's behalf using information the business provides, and notifies the business owner when a conversation needs human attention — such as confirming a payment or handling a special request.</p>
+
+    <h2>Business accounts</h2>
+    <p>Businesses that connect a WhatsApp or Instagram account to Qantu are responsible for the accuracy of the information they provide us (product details, pricing, availability, policies), and for reviewing and acting on the summaries and handoff notifications Qantu sends them. Qantu is a tool to assist a business's communication — it does not replace the business's judgment on matters such as payment confirmation, refunds, or disputes.</p>
+
+    <h2>Acceptable use</h2>
+    <p>You agree not to use Qantu to:</p>
+    <ul>
+      <li>Send unsolicited or spam messages</li>
+      <li>Impersonate another person or business</li>
+      <li>Collect or process customer data in violation of applicable law</li>
+      <li>Use the service for any unlawful, harmful, or fraudulent purpose</li>
+    </ul>
+
+    <h2>Availability</h2>
+    <p>Qantu is provided on an "as is" and "as available" basis. We do not guarantee uninterrupted or error-free operation, and we are not responsible for message delivery issues, delays, or outages caused by third-party platforms such as Meta's WhatsApp Business Platform or Instagram Messaging API.</p>
+
+    <h2>Limitation of liability</h2>
+    <p>Qantu is not liable for any losses arising from a business's use of automated responses, including but not limited to incorrect information relayed to a customer, missed handoffs, or disputes arising from a transaction facilitated through the service. Businesses remain responsible for the outcomes of their customer interactions.</p>
+
+    <h2>Changes to these terms</h2>
+    <p>We may update these terms from time to time. Continued use of Qantu after changes are posted constitutes acceptance of the revised terms.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about these terms can be sent to <a href="mailto:hello@qantu.app">hello@qantu.app</a>.</p>
+  </main>
+
+  <footer>
+    <span>© 2026 Qantu</span>
+    <span>hello@qantu.app</span>
+  </footer>
+</div>
+
+</body>
+</html>
