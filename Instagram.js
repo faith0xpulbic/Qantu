@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { getSession, updateSession, addMessage } = require('./sessions');
 const { processMessage } = require('./Bot');
-const { pingOwner } = require('./Whatsapp');
+const { pingOwner } = require('./WhatsApp');
 
 const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
 const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
