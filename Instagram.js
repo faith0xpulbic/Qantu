@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { getSession, updateSession, addMessage } = require('./sessions');
 const { processMessage } = require('./Bot');
-const { pingOwner } = require('./WhatsApp');
+const { pingOwner } = require('./Whatsapp');
 
 const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
 const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
@@ -31,10 +31,17 @@ async function sendInstagramMessage(recipientId, text) {
 async function handleIncomingInstagramMessage(body) {
   const entry = body.entry?.[0];
 
-  // Instagram 'messages' field payloads arrive as entry.changes[0].value
-  // (same shape as WhatsApp), NOT entry.messaging[0] like older Messenger webhooks.
-  const change = entry?.changes?.[0];
-  const value = change?.value;
+  // Instagram sends two different shapes for the same 'messages' field:
+  // - Real DMs arrive as entry.messaging[0]
+  // - Meta's dashboard Test button sends entry.changes[0].value
+  // We normalize both into the same 'value' shape here.
+  let value = null;
+
+  if (entry?.messaging?.[0]) {
+    value = entry.messaging[0];
+  } else if (entry?.changes?.[0]?.value) {
+    value = entry.changes[0].value;
+  }
 
   if (!value || !value.message) {
     console.log('No Instagram message found in payload, skipping');
