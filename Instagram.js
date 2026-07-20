@@ -1,16 +1,23 @@
 const axios = require('axios');
-const { getSession, updateSession, addMessage } = require('./sessions');
+const {
+  getBusinessByInstagramAccountId,
+  findOrCreateCustomer,
+  getOrCreateActiveConversation,
+  updateConversationStatus,
+  saveMessage,
+  getRecentMessages,
+  saveNote,
+  getNotes,
+  getBusinessSettings,
+} = require('./Database');
 const { processMessage } = require('./Bot');
 const { pingOwner } = require('./WhatsApp');
 
-const INSTAGRAM_TOKEN = process.env.INSTAGRAM_TOKEN;
-const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
+const API_URL = 'https://graph.instagram.com/v25.0/me/messages';
 
-const API_URL = `https://graph.instagram.com/v25.0/me/messages`;
-
-async function sendInstagramMessage(recipientId, text) {
+async function sendInstagramMessage(business, recipientId, text) {
   try {
-    await axios.post(
+    const response = await axios.post(
       API_URL,
       {
         recipient: { id: recipientId },
@@ -18,11 +25,12 @@ async function sendInstagramMessage(recipientId, text) {
       },
       {
         headers: {
-          Authorization: `Bearer ${INSTAGRAM_TOKEN}`,
+          Authorization: `Bearer ${business.instagram_token}`,
           'Content-Type': 'application/json',
         },
       }
     );
+    console.log('Instagram send success:', JSON.stringify(response.data));
   } catch (err) {
     console.error('Error sending Instagram message:', err.response?.data || err.message);
   }
@@ -30,11 +38,11 @@ async function sendInstagramMessage(recipientId, text) {
 
 async function handleIncomingInstagramMessage(body) {
   const entry = body.entry?.[0];
+  const instagramAccountId = entry?.id;
 
   // Instagram sends two different shapes for the same 'messages' field:
   // - Real DMs arrive as entry.messaging[0]
   // - Meta's dashboard Test button sends entry.changes[0].value
-  // We normalize both into the same 'value' shape here.
   let value = null;
 
   if (entry?.messaging?.[0]) {
@@ -50,6 +58,12 @@ async function handleIncomingInstagramMessage(body) {
 
   if (value.message.is_echo) return;
 
+  const business = await getBusinessByInstagramAccountId(instagramAccountId);
+  if (!business) {
+    console.error('No business found for Instagram account_id:', instagramAccountId);
+    return;
+  }
+
   const fromId = value.sender?.id;
   const text = value.message.text || null;
 
@@ -61,37 +75,56 @@ async function handleIncomingInstagramMessage(body) {
     return;
   }
 
-  console.log(`Instagram from ${fromId}: ${text || '[attachment]'}`);
+  console.log(`Instagram from ${fromId} (${business.name}): ${text || '[attachment]'}`);
 
-  const sessionId = `ig_${fromId}`;
-  const session = getSession(sessionId);
-  updateSession(sessionId, { channel: 'instagram' });
+  const customer = await findOrCreateCustomer(business.id, 'instagram', fromId);
+  if (!customer) {
+    console.error('Could not resolve customer for', fromId);
+    return;
+  }
+
+  const conversation = await getOrCreateActiveConversation(business.id, customer.id, 'instagram');
+  if (!conversation) {
+    console.error('Could not resolve conversation for customer', customer.id);
+    return;
+  }
 
   const customerContent = mediaUrl
     ? (text ? `[image] ${text}` : '[image]')
     : text;
-  addMessage(sessionId, 'customer', customerContent);
+  await saveMessage(conversation.id, 'customer', customerContent);
 
-  const result = await processMessage(session, text, mediaUrl);
+  const businessSettings = await getBusinessSettings(business.id);
+  const notes = await getNotes(conversation.id);
+  const recentMessages = await getRecentMessages(conversation.id);
+
+  const context = { businessSettings, notes, recentMessages };
+  const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
 
-  await sendInstagramMessage(fromId, result.reply);
-  addMessage(sessionId, 'assistant', result.reply);
+  await sendInstagramMessage(business, fromId, result.reply);
+  await saveMessage(conversation.id, 'assistant', result.reply);
+
+  if (result.save_note) {
+    await saveNote(conversation.id, result.save_note);
+  }
 
   // All owner pings route to WhatsApp regardless of source channel
   if (result.action === 'PING_OWNER' && result.owner_summary) {
     await pingOwner(
+      business,
       `${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
     );
-    updateSession(sessionId, { status: 'awaiting_owner' });
+    await updateConversationStatus(conversation.id, 'awaiting_owner');
   }
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
     await pingOwner(
+      business,
       `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
     );
-    updateSession(sessionId, { status: 'handed_off' });
+    await updateConversationStatus(conversation.id, 'handed_off');
   }
 }
 
