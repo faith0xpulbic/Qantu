@@ -1,13 +1,12 @@
 const axios = require('axios');
 const { SYSTEM_PROMPT } = require('./prompts');
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-// OpenRouter's built-in router automatically picks a working free model
-// for you — solves the problem of hardcoded free model slugs going stale
-// or hitting individual rate limits. This is the recommended approach
-// over hardcoding specific :free model names.
-const MODELS = ['openrouter/free'];
+// Primary model is strong and explicitly supports structured/tool-use output.
+// Fallback is the smaller sibling in the same family, used only if the
+// primary is rate-limited.
+const MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
 
 // Builds the final system prompt by injecting this business's settings
 // and the bot's own notes about this specific conversation.
@@ -48,7 +47,7 @@ async function processMessage(context, text, mediaUrl = null) {
   for (const model of MODELS) {
     try {
       const response = await axios.post(
-        OPENROUTER_URL,
+        GROQ_URL,
         {
           model,
           messages: [
@@ -56,20 +55,25 @@ async function processMessage(context, text, mediaUrl = null) {
             ...history,
             { role: 'user', content: userContent },
           ],
+          // Forces Groq to only return valid JSON — the model's own
+          // decoding is constrained so it cannot reply in plain text.
+          response_format: { type: 'json_object' },
+          temperature: 0.7,
         },
         {
           headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
             'Content-Type': 'application/json',
           },
         }
       );
 
       const rawText = response.data.choices?.[0]?.message?.content?.trim() || '';
+      const actualModel = response.data.model || model;
+      console.log(`Groq responded using model: ${actualModel}`);
 
       try {
-        const cleaned = rawText.replace(/^```json\s*|```$/g, '').trim();
-        const parsed = JSON.parse(cleaned);
+        const parsed = JSON.parse(rawText);
 
         return {
           reply: parsed.reply || "Thanks for your message — let me get back to you shortly.",
@@ -89,9 +93,7 @@ async function processMessage(context, text, mediaUrl = null) {
         };
       }
     } catch (err) {
-      console.error(`Error calling OpenRouter with model ${model}:`, err.response?.data || err.message);
-      // If this was a rate limit (429), try the next model in the list.
-      // Any other error type, stop retrying and fall through to the fallback reply.
+      console.error(`Error calling Groq with model ${model}:`, err.response?.data || err.message);
       const status = err.response?.status;
       if (status !== 429) break;
     }
