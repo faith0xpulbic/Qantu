@@ -5,14 +5,15 @@
   "main": "src/Index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node Index.js",
-    "dev": "node --watch Index.js"
+    "start": "node src/Index.js",
+    "dev": "node --watch src/Index.js"
   },
   "dependencies": {
     "express": "^4.19.2",
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
-    "body-parser": "^1.20.2"
+    "body-parser": "^1.20.2",
+    "@supabase/supabase-js": "^2.45.4"
   },
   "engines": {
     "node": ">=18.0.0"
