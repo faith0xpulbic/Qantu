@@ -3,13 +3,11 @@ const { SYSTEM_PROMPT } = require('./prompts');
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Free models rotate and get rate-limited often — try the primary first,
-// fall back to alternates if it fails. Update this list if models get pulled.
-const MODELS = [
-  'google/gemma-4-31b-it:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'openai/gpt-oss-120b:free',
-];
+// OpenRouter's built-in router automatically picks a working free model
+// for you — solves the problem of hardcoded free model slugs going stale
+// or hitting individual rate limits. This is the recommended approach
+// over hardcoding specific :free model names.
+const MODELS = ['openrouter/free'];
 
 // Builds the final system prompt by injecting this business's settings
 // and the bot's own notes about this specific conversation.
