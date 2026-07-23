@@ -8,9 +8,9 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 // primary is rate-limited.
 const MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
 
-// Builds the final system prompt by injecting this business's settings
-// and the bot's own notes about this specific conversation.
-function buildSystemPrompt(businessSettings, notes) {
+// Builds the final system prompt by injecting this business's settings,
+// its factual knowledge, and the bot's own notes about this conversation.
+function buildSystemPrompt(businessSettings, businessKnowledge, notes) {
   let prompt = SYSTEM_PROMPT;
 
   const settingsEntries = Object.entries(businessSettings || {});
@@ -21,6 +21,13 @@ function buildSystemPrompt(businessSettings, notes) {
     prompt += `\n\nBUSINESS SETTINGS (follow these rules for this business):\n${settingsText}`;
   }
 
+  if (businessKnowledge && businessKnowledge.length > 0) {
+    const knowledgeText = businessKnowledge
+      .map(k => `[${k.category}]\n${k.content}`)
+      .join('\n\n');
+    prompt += `\n\nBUSINESS INFORMATION (use this to answer customer questions accurately):\n${knowledgeText}`;
+  }
+
   if (notes && notes.length > 0) {
     const notesText = notes.map(n => `- ${n.note}`).join('\n');
     prompt += `\n\nYOUR OWN NOTES ABOUT THIS CONVERSATION SO FAR:\n${notesText}`;
@@ -29,11 +36,11 @@ function buildSystemPrompt(businessSettings, notes) {
   return prompt;
 }
 
-// context = { businessSettings, notes, recentMessages }
+// context = { businessSettings, businessKnowledge, notes, recentMessages }
 async function processMessage(context, text, mediaUrl = null) {
-  const { businessSettings, notes, recentMessages } = context;
+  const { businessSettings, businessKnowledge, notes, recentMessages } = context;
 
-  const systemPrompt = buildSystemPrompt(businessSettings, notes);
+  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes);
 
   const history = (recentMessages || []).map(m => ({
     role: m.role === 'customer' ? 'user' : 'assistant',
