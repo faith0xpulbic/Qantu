@@ -150,9 +150,9 @@ async function updateConversationStatus(conversationId, status) {
 // used when the owner replies, to figure out which conversation(s) their
 // reply might apply to.
 async function getAwaitingOwnerConversations(businessId) {
-  const { data, error } = await supabase
+  const { data: conversations, error } = await supabase
     .from('conversations')
-    .select('*, customers(*), customer_channels(channel_type, channel_identifier)')
+    .select('*, customers(*)')
     .eq('business_id', businessId)
     .eq('status', 'awaiting_owner')
     .order('created_at', { ascending: false });
@@ -161,7 +161,25 @@ async function getAwaitingOwnerConversations(businessId) {
     console.error('Error fetching awaiting_owner conversations:', error.message);
     return [];
   }
-  return data;
+
+  // customer_channels isn't directly linked to conversations in the schema,
+  // both are children of customers, so we fetch each conversation's
+  // channels in a separate step rather than a single nested join.
+  for (const conv of conversations) {
+    const { data: channels, error: channelError } = await supabase
+      .from('customer_channels')
+      .select('channel_type, channel_identifier')
+      .eq('customer_id', conv.customer_id);
+
+    if (channelError) {
+      console.error('Error fetching channels for conversation:', channelError.message);
+      conv.customer_channels = [];
+    } else {
+      conv.customer_channels = channels;
+    }
+  }
+
+  return conversations;
 }
 
 // ============================================
