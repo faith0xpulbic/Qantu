@@ -9,6 +9,7 @@ const {
   saveNote,
   getNotes,
   getBusinessSettings,
+  getBusinessKnowledge,
 } = require('./Database');
 const { processMessage } = require('./Bot');
 const { pingOwner } = require('./WhatsApp');
@@ -95,10 +96,11 @@ async function handleIncomingInstagramMessage(body) {
   await saveMessage(conversation.id, 'customer', customerContent);
 
   const businessSettings = await getBusinessSettings(business.id);
+  const businessKnowledge = await getBusinessKnowledge(business.id);
   const notes = await getNotes(conversation.id);
   const recentMessages = await getRecentMessages(conversation.id);
 
-  const context = { businessSettings, notes, recentMessages };
+  const context = { businessSettings, businessKnowledge, notes, recentMessages };
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
