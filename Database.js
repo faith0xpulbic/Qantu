@@ -231,6 +231,19 @@ async function getBusinessSettings(businessId) {
   return settings;
 }
 
+async function getBusinessKnowledge(businessId) {
+  const { data, error } = await supabase
+    .from('business_knowledge')
+    .select('category, content')
+    .eq('business_id', businessId);
+
+  if (error) {
+    console.error('Error fetching business knowledge:', error.message);
+    return [];
+  }
+  return data;
+}
+
 module.exports = {
   getBusinessByWhatsAppPhoneNumberId,
   getBusinessByInstagramAccountId,
@@ -242,4 +255,5 @@ module.exports = {
   saveNote,
   getNotes,
   getBusinessSettings,
+  getBusinessKnowledge,
 };
