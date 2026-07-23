@@ -12,7 +12,7 @@ const {
   getBusinessKnowledge,
 } = require('./Database');
 const { processMessage } = require('./Bot');
-const { pingOwner } = require('./WhatsApp');
+const { pingOwner, registerInstagramRelay } = require('./WhatsApp');
 
 const API_URL = 'https://graph.instagram.com/v25.0/me/messages';
 
@@ -36,6 +36,11 @@ async function sendInstagramMessage(business, recipientId, text) {
     console.error('Error sending Instagram message:', err.response?.data || err.message);
   }
 }
+
+// Registers this file's send function with WhatsApp.js, so an owner's
+// WhatsApp reply can be relayed to an Instagram customer without the two
+// files needing to require() each other directly (which would be circular).
+registerInstagramRelay(sendInstagramMessage);
 
 async function handleIncomingInstagramMessage(body) {
   const entry = body.entry?.[0];
@@ -104,6 +109,9 @@ async function handleIncomingInstagramMessage(body) {
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
+  if (result.owner_summary) {
+    console.log(`Owner summary content: ${result.owner_summary}`);
+  }
 
   await sendInstagramMessage(business, fromId, result.reply);
   await saveMessage(conversation.id, 'assistant', result.reply);
