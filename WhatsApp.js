@@ -9,6 +9,7 @@ const {
   saveNote,
   getNotes,
   getBusinessSettings,
+  getBusinessKnowledge,
 } = require('./Database');
 const { processMessage } = require('./Bot');
 
@@ -89,12 +90,13 @@ async function handleIncomingWhatsAppMessage(body) {
     : text;
   await saveMessage(conversation.id, 'customer', customerContent);
 
-  // Gather context for the bot: business rules, its own notes, recent messages
+  // Gather context for the bot: business rules, business info, its own notes, recent messages
   const businessSettings = await getBusinessSettings(business.id);
+  const businessKnowledge = await getBusinessKnowledge(business.id);
   const notes = await getNotes(conversation.id);
   const recentMessages = await getRecentMessages(conversation.id);
 
-  const context = { businessSettings, notes, recentMessages };
+  const context = { businessSettings, businessKnowledge, notes, recentMessages };
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
