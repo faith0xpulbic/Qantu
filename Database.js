@@ -146,6 +146,24 @@ async function updateConversationStatus(conversationId, status) {
   }
 }
 
+// Finds conversations currently waiting on the owner for this business —
+// used when the owner replies, to figure out which conversation(s) their
+// reply might apply to.
+async function getAwaitingOwnerConversations(businessId) {
+  const { data, error } = await supabase
+    .from('conversations')
+    .select('*, customers(*), customer_channels(channel_type, channel_identifier)')
+    .eq('business_id', businessId)
+    .eq('status', 'awaiting_owner')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching awaiting_owner conversations:', error.message);
+    return [];
+  }
+  return data;
+}
+
 // ============================================
 // MESSAGES
 // Every message is saved automatically — no AI judgment needed here.
@@ -256,4 +274,5 @@ module.exports = {
   getNotes,
   getBusinessSettings,
   getBusinessKnowledge,
+  getAwaitingOwnerConversations,
 };
