@@ -138,15 +138,10 @@ async function getOrCreateActiveConversation(businessId, customerId, channelType
   return newConversation;
 }
 
-async function updateConversationStatus(conversationId, status, ownerSummary = null) {
-  const updates = { status };
-  if (ownerSummary) {
-    updates.last_owner_summary = ownerSummary;
-  }
-
+async function updateConversationStatus(conversationId, status) {
   const { error } = await supabase
     .from('conversations')
-    .update(updates)
+    .update({ status })
     .eq('id', conversationId);
 
   if (error) {
