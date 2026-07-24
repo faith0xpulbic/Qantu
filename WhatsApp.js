@@ -39,12 +39,19 @@ async function sendWhatsAppMessage(business, toNumber, text) {
   }
 }
 
-async function pingOwner(business, text) {
+async function pingOwner(business, text, conversationId = null) {
   if (!business.owner_contact) {
     console.warn('No owner_contact set for this business — skipping owner ping');
     return;
   }
   await sendWhatsAppMessage(business, business.owner_contact, text);
+
+  // Save this ping as a real message on the conversation, so when the
+  // owner replies, the full back-and-forth (bot's ping + owner's reply)
+  // is just normal conversation history, no separate summary field needed.
+  if (conversationId) {
+    await saveMessage(conversationId, 'owner_ping', text);
+  }
 }
 
 // Strips formatting differences (+, spaces, leading zeros) so phone number
@@ -78,11 +85,16 @@ async function handleOwnerReply(business, text) {
     return;
   }
 
-  // Genuinely multiple pending — the owner needs to specify, but we give
-  // them real context (what each one was about) rather than a bare list.
-  const list = pending
-    .map((c, i) => `${i + 1}. ${c.channel_type}: ${c.last_owner_summary || 'no summary available'}`)
-    .join('\n');
+  // Genuinely multiple pending — show the owner what each one was
+  // actually about, pulled from the real ping message already sent,
+  // not a separate stored field.
+  const listItems = [];
+  for (const c of pending) {
+    const recent = await getRecentMessages(c.id, 5);
+    const lastPing = [...recent].reverse().find(m => m.role === 'owner_ping');
+    listItems.push(`${c.channel_type}: ${lastPing ? lastPing.content.split('\n')[0] : 'no context available'}`);
+  }
+  const list = listItems.map((item, i) => `${i + 1}. ${item}`).join('\n');
   await sendWhatsAppMessage(
     business,
     business.owner_contact,
@@ -220,15 +232,17 @@ async function handleIncomingWhatsAppMessage(body) {
   if (result.action === 'PING_OWNER' && result.owner_summary) {
     await pingOwner(
       business,
-      `${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`
+      `${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`,
+      conversation.id
     );
-    await updateConversationStatus(conversation.id, 'awaiting_owner', result.owner_summary);
+    await updateConversationStatus(conversation.id, 'awaiting_owner');
   }
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
     await pingOwner(
       business,
-      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`
+      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`,
+      conversation.id
     );
     await updateConversationStatus(conversation.id, 'handed_off');
   }
