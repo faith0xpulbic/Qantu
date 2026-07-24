@@ -71,7 +71,10 @@ async function findOrCreateCustomer(businessId, channelType, channelIdentifier) 
   // No existing channel found — create a brand new customer + channel link
   const { data: newCustomer, error: newCustomerError } = await supabase
     .from('customers')
-    .insert({ business_id: businessId })
+    .insert({
+      business_id: businessId,
+      primary_phone: channelType === 'whatsapp' ? channelIdentifier : null,
+    })
     .select()
     .single();
 
@@ -135,10 +138,15 @@ async function getOrCreateActiveConversation(businessId, customerId, channelType
   return newConversation;
 }
 
-async function updateConversationStatus(conversationId, status) {
+async function updateConversationStatus(conversationId, status, ownerSummary = null) {
+  const updates = { status };
+  if (ownerSummary) {
+    updates.last_owner_summary = ownerSummary;
+  }
+
   const { error } = await supabase
     .from('conversations')
-    .update({ status })
+    .update(updates)
     .eq('id', conversationId);
 
   if (error) {
