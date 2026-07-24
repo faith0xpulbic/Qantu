@@ -57,14 +57,11 @@ function normalizePhone(number) {
 // Handles a message from the confirmed business owner, as distinct from
 // a customer message.
 //
-// If exactly one conversation is awaiting the owner, the owner's message
-// is treated as instructions to relay to that customer, and gets sent
-// through the AI so it's phrased naturally in Amara's voice rather than
-// pasted raw.
-//
-// If multiple conversations are awaiting the owner, or none are, the
-// owner is asked to clarify rather than guessing wrong and sending
-// something to the wrong customer.
+// Logic: find conversations still awaiting the owner. If there's exactly
+// one, this reply is obviously for that one, relay it directly, no need
+// to ask. If there are genuinely multiple still open, show the owner what
+// each one was actually about (using the summary already sent) so they
+// can just say which, in plain language, not a rigid numbered menu.
 async function handleOwnerReply(business, text) {
   console.log(`Owner reply received for ${business.name}: "${text}"`);
 
@@ -75,21 +72,22 @@ async function handleOwnerReply(business, text) {
     return;
   }
 
-  if (pending.length > 1) {
-    const list = pending
-      .map((c, i) => `${i + 1}. ${c.channel_type} — ${c.customers?.name || 'customer'}`)
-      .join('\n');
-    await sendWhatsAppMessage(
-      business,
-      business.owner_contact,
-      `I've got ${pending.length} customers waiting on you right now. Reply with the number of who this is for:\n${list}`
-    );
+  if (pending.length === 1) {
+    // Only one thing waiting on the owner right now — this reply is for it.
+    await relayOwnerMessageToCustomer(business, pending[0], text);
     return;
   }
 
-  // Exactly one pending conversation — relay to it.
-  const conversation = pending[0];
-  await relayOwnerMessageToCustomer(business, conversation, text);
+  // Genuinely multiple pending — the owner needs to specify, but we give
+  // them real context (what each one was about) rather than a bare list.
+  const list = pending
+    .map((c, i) => `${i + 1}. ${c.channel_type}: ${c.last_owner_summary || 'no summary available'}`)
+    .join('\n');
+  await sendWhatsAppMessage(
+    business,
+    business.owner_contact,
+    `I've got a few things waiting on you, which one is this about?\n${list}`
+  );
 }
 
 // Sends the owner's message to the actual waiting customer, on whichever
@@ -224,7 +222,7 @@ async function handleIncomingWhatsAppMessage(body) {
       business,
       `${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`
     );
-    await updateConversationStatus(conversation.id, 'awaiting_owner');
+    await updateConversationStatus(conversation.id, 'awaiting_owner', result.owner_summary);
   }
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
