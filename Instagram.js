@@ -126,7 +126,7 @@ async function handleIncomingInstagramMessage(body) {
       business,
       `${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
     );
-    await updateConversationStatus(conversation.id, 'awaiting_owner');
+    await updateConversationStatus(conversation.id, 'awaiting_owner', result.owner_summary);
   }
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
