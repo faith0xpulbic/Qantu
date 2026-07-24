@@ -89,14 +89,29 @@ async function processMessage(context, text, mediaUrl = null) {
 
   for (const m of (recentMessages || [])) {
     const gapMarker = formatGap(previousTimestamp, m.created_at);
-    const role = m.role === 'customer' ? 'user' : 'model';
+
+    let role, content;
+    if (m.role === 'customer') {
+      role = 'user';
+      content = m.content;
+    } else if (m.role === 'owner') {
+      role = 'user';
+      content = `[This was the business owner speaking to you privately, not the customer]: ${m.content}`;
+    } else if (m.role === 'owner_ping') {
+      // This is the bot's own prior message to the owner, so it's a
+      // model-role turn, just clearly labeled as owner-directed rather
+      // than customer-directed.
+      role = 'model';
+      content = `[You said this to the business owner privately]: ${m.content}`;
+    } else {
+      role = 'model';
+      content = m.content;
+    }
 
     if (gapMarker) {
-      // Gemini has no 'system' role mid-conversation, so we fold gap
-      // markers into the message content itself instead.
-      history.push({ role, parts: [{ text: `${gapMarker} ${m.content}` }] });
+      history.push({ role, parts: [{ text: `${gapMarker} ${content}` }] });
     } else {
-      history.push({ role, parts: [{ text: m.content }] });
+      history.push({ role, parts: [{ text: content }] });
     }
     previousTimestamp = m.created_at;
   }
