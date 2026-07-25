@@ -15,6 +15,7 @@ const {
   getRecentCustomerStatuses,
 } = require('./Database');
 const { processMessage, processOwnerMessage } = require('./Bot');
+const { embedReference, extractReference, stripReference } = require('./MessageRefs');
 
 const API_URL = 'https://graph.facebook.com/v25.0';
 
@@ -41,7 +42,7 @@ async function sendWhatsAppMessage(business, toNumber, text) {
   }
 }
 
-async function pingOwner(business, text, conversationId = null) {
+async function pingOwner(business, text, conversationId = null, customerId = null) {
   if (!business.owner_contact) {
     console.warn('No owner_contact set for this business — skipping owner ping');
     return;
@@ -51,8 +52,13 @@ async function pingOwner(business, text, conversationId = null) {
   // Save this ping as a real message on the conversation, so when the
   // owner replies, the full back-and-forth (bot's ping + owner's reply)
   // is just normal conversation history, no separate summary field needed.
+  // The stored copy also carries an invisible reference to the exact
+  // conversation/customer this ping was about, so the bot can trace back
+  // to the right one deterministically later, rather than guessing from
+  // vague owner language.
   if (conversationId) {
-    await saveMessage(conversationId, 'owner_ping', text);
+    const storedText = embedReference(text, { conversationId, customerId });
+    await saveMessage(conversationId, 'owner_ping', storedText);
   }
 }
 
@@ -122,7 +128,7 @@ async function getRecentOwnerPingSummaries(businessId, limit = 5) {
         channel: conv.channel,
         status: conv.status,
         tags: conv.tags,
-        lastPing: lastPing.content,
+        lastPing: stripReference(lastPing.content),
       });
     }
   }
@@ -241,7 +247,8 @@ async function handleIncomingWhatsAppMessage(body) {
     await pingOwner(
       business,
       `${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`,
-      conversation.id
+      conversation.id,
+      customer.id
     );
     await updateConversationStatus(conversation.id, 'awaiting_owner');
   }
@@ -250,7 +257,8 @@ async function handleIncomingWhatsAppMessage(body) {
     await pingOwner(
       business,
       `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Customer: ${fromNumber}\n📱 Channel: WhatsApp`,
-      conversation.id
+      conversation.id,
+      customer.id
     );
     await updateConversationStatus(conversation.id, 'handed_off');
   }
