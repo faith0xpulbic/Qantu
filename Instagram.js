@@ -124,15 +124,19 @@ async function handleIncomingInstagramMessage(body) {
   if (result.action === 'PING_OWNER' && result.owner_summary) {
     await pingOwner(
       business,
-      `${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
+      `${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`,
+      conversation.id,
+      customer.id
     );
-    await updateConversationStatus(conversation.id, 'awaiting_owner', result.owner_summary);
+    await updateConversationStatus(conversation.id, 'awaiting_owner');
   }
 
   if (result.action === 'HANDOFF' && result.owner_summary) {
     await pingOwner(
       business,
-      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`
+      `⚠️ *Handoff Required*\n\n${result.owner_summary}\n\n👉 Instagram user: ${fromId}\n📱 Channel: Instagram`,
+      conversation.id,
+      customer.id
     );
     await updateConversationStatus(conversation.id, 'handed_off');
   }
