@@ -196,7 +196,7 @@ const TOOLS = [
     functionDeclarations: [
       {
         name: 'get_conversation_history',
-        description: 'Full message history, notes, and tags for one specific conversation. Use this when you need to check what was actually said or sent in a conversation to answer a factual question.',
+        description: 'Full message history, notes, and tags for one specific conversation. The conversation_id must be one of the IDs provided to you in the RECENT CONVERSATIONS list, never guess or construct an ID from anything the owner types, phone numbers, usernames, or other identifiers the owner mentions are NOT conversation IDs.',
         parameters: {
           type: 'object',
           properties: {
@@ -234,14 +234,34 @@ const TOOLS = [
 // Executes a tool the model requested, using the actual database functions.
 // Injected as arguments since Bot.js shouldn't import Database.js directly,
 // keeping the database layer decoupled from the AI layer.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Strips the invisible reference marker some stored messages carry
+// (embedded by WhatsApp.js/Instagram.js when pinging the owner) before
+// showing message content back to the model as readable text.
+function stripRefMarker(text) {
+  if (!text) return text;
+  return text.replace(/\n?<!--ref:[^>]+-->/, '').trim();
+}
+
 async function executeTool(name, args, dbFunctions) {
   if (name === 'get_conversation_history') {
-    return await dbFunctions.getConversationFullContext(args.conversation_id);
+    if (!UUID_PATTERN.test(args.conversation_id || '')) {
+      return { error: 'That is not a valid conversation_id, only use IDs from the RECENT CONVERSATIONS list provided to you, not phone numbers or usernames.' };
+    }
+    const context = await dbFunctions.getConversationFullContext(args.conversation_id);
+    if (context && context.messages) {
+      context.messages = context.messages.map(m => ({ ...m, content: stripRefMarker(m.content) }));
+    }
+    return context;
   }
   if (name === 'get_recent_customer_statuses') {
     return await dbFunctions.getRecentCustomerStatuses(dbFunctions.businessId, args.hours_back || 48);
   }
   if (name === 'send_message_to_customer') {
+    if (!UUID_PATTERN.test(args.conversation_id || '')) {
+      return { error: 'That is not a valid conversation_id, only use IDs from the RECENT CONVERSATIONS list provided to you, not phone numbers or usernames.' };
+    }
     const sent = await dbFunctions.sendToCustomer(args.conversation_id, args.message);
     return { sent, conversation_id: args.conversation_id };
   }
@@ -295,9 +315,19 @@ async function processOwnerMessage(ownerContext, ownerText, dbFunctions) {
 
         const result = await executeTool(name, args || {}, dbFunctions);
 
-        // Append the model's function call, then our function's result,
-        // to the conversation history, per Gemini's documented pattern.
-        contents.push({ role: 'model', parts: [{ functionCall: functionCallPart.functionCall }] });
+        // Gemini requires the thoughtSignature to be preserved exactly as
+        // received when echoing the function call back. Without it, the
+        // API rejects the next request outright. Fall back to the
+        // documented dummy signature if none was returned, since some
+        // responses may omit it depending on thinking configuration.
+        const modelPart = { functionCall: functionCallPart.functionCall };
+        if (functionCallPart.thoughtSignature) {
+          modelPart.thoughtSignature = functionCallPart.thoughtSignature;
+        } else {
+          modelPart.thoughtSignature = 'skip_thought_signature_validator';
+        }
+
+        contents.push({ role: 'model', parts: [modelPart] });
         contents.push({
           role: 'user',
           parts: [{ functionResponse: { name, response: { result } } }],
