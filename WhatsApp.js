@@ -10,9 +10,11 @@ const {
   getNotes,
   getBusinessSettings,
   getBusinessKnowledge,
-  getAwaitingOwnerConversations,
+  getConversationById,
+  getConversationFullContext,
+  getRecentCustomerStatuses,
 } = require('./Database');
-const { processMessage } = require('./Bot');
+const { processMessage, processOwnerMessage } = require('./Bot');
 
 const API_URL = 'https://graph.facebook.com/v25.0';
 
@@ -64,85 +66,91 @@ function normalizePhone(number) {
 // Handles a message from the confirmed business owner, as distinct from
 // a customer message.
 //
-// Logic: find conversations still awaiting the owner. If there's exactly
-// one, this reply is obviously for that one, relay it directly, no need
-// to ask. If there are genuinely multiple still open, show the owner what
-// each one was actually about (using the summary already sent) so they
-// can just say which, in plain language, not a rigid numbered menu.
+// The AI now has real tools available (full conversation lookup, and a
+// lightweight recent-status sweep), so instead of code pre-deciding which
+// single conversation this relates to, we give it a short list of recent
+// conversations it has personally brought to the owner's attention (with
+// their IDs), and let it investigate and decide for itself: answer
+// directly, relay something to a customer, or ask for clarification.
 async function handleOwnerReply(business, text) {
   console.log(`Owner reply received for ${business.name}: "${text}"`);
 
-  const pending = await getAwaitingOwnerConversations(business.id);
-
-  if (pending.length === 0) {
-    console.log('No conversations currently awaiting owner — reply logged only, nothing to relay.');
-    return;
-  }
-
-  if (pending.length === 1) {
-    // Only one thing waiting on the owner right now — this reply is for it.
-    await relayOwnerMessageToCustomer(business, pending[0], text);
-    return;
-  }
-
-  // Genuinely multiple pending — show the owner what each one was
-  // actually about, pulled from the real ping message already sent,
-  // not a separate stored field.
-  const listItems = [];
-  for (const c of pending) {
-    const recent = await getRecentMessages(c.id, 5);
-    const lastPing = [...recent].reverse().find(m => m.role === 'owner_ping');
-    listItems.push(`${c.channel_type}: ${lastPing ? lastPing.content.split('\n')[0] : 'no context available'}`);
-  }
-  const list = listItems.map((item, i) => `${i + 1}. ${item}`).join('\n');
-  await sendWhatsAppMessage(
-    business,
-    business.owner_contact,
-    `I've got a few things waiting on you, which one is this about?\n${list}`
-  );
-}
-
-// Sends the owner's message to the actual waiting customer, on whichever
-// channel that conversation is on. Passes it through the AI so it comes
-// out in Amara's natural voice rather than pasted raw, and marks the
-// conversation active again since the owner has now responded.
-async function relayOwnerMessageToCustomer(business, conversation, ownerText) {
-  await saveMessage(conversation.id, 'owner', ownerText);
+  const recentOwnerContext = await getRecentOwnerPingSummaries(business.id);
 
   const businessSettings = await getBusinessSettings(business.id);
   const businessKnowledge = await getBusinessKnowledge(business.id);
-  const notes = await getNotes(conversation.id);
-  const recentMessages = await getRecentMessages(conversation.id);
 
-  const context = { businessSettings, businessKnowledge, notes, recentMessages };
-  // Wrap the owner's message clearly so the model understands this is
-  // the owner giving it information to relay, not a customer speaking.
-  const promptText = `[The business owner just told you the following, relay this to the customer naturally in your own voice]: ${ownerText}`;
+  const dbFunctions = {
+    getConversationFullContext,
+    getRecentCustomerStatuses,
+    businessId: business.id,
+    sendToCustomer: async (conversationId, message) => {
+      const conversation = await getConversationById(conversationId);
+      if (!conversation) return false;
+      await saveMessage(conversationId, 'owner', text);
+      await relayMessageToCustomer(business, conversation, message);
+      await saveMessage(conversationId, 'assistant', message);
+      await updateConversationStatus(conversationId, 'active');
+      return true;
+    },
+  };
 
-  const result = await processMessage(context, promptText);
+  const result = await processOwnerMessage(
+    { businessSettings, businessKnowledge, recentOwnerContext },
+    text,
+    dbFunctions
+  );
 
-  console.log(`Relaying owner reply to customer on ${conversation.channel_type}`);
+  await sendWhatsAppMessage(business, business.owner_contact, result.reply);
+}
+
+// Builds a compact list of the business's most recent owner_ping messages
+// across recent conversations, each tagged with its conversation_id,
+// channel, and a short excerpt, so the AI automatically has real
+// candidates to reason over the moment the owner messages, without
+// needing to call a tool just to see what's been going on recently.
+async function getRecentOwnerPingSummaries(businessId, limit = 5) {
+  const recentStatuses = await getRecentCustomerStatuses(businessId, 72);
+  const summaries = [];
+
+  for (const conv of recentStatuses.slice(0, limit)) {
+    const messages = await getRecentMessages(conv.conversation_id, 10);
+    const lastPing = [...messages].reverse().find(m => m.role === 'owner_ping');
+    if (lastPing) {
+      summaries.push({
+        conversation_id: conv.conversation_id,
+        channel: conv.channel,
+        status: conv.status,
+        tags: conv.tags,
+        lastPing: lastPing.content,
+      });
+    }
+  }
+
+  return summaries;
+}
+
+// Relays a message to the actual customer on whichever channel their
+// conversation is on. Used both by the owner-reply flow (when the AI
+// decides to relay something) and available for future direct use.
+async function relayMessageToCustomer(business, conversation, replyText) {
+  console.log(`Relaying message to customer on ${conversation.channel_type}`);
 
   if (conversation.channel_type === 'whatsapp') {
     const whatsappChannel = conversation.customer_channels?.find(c => c.channel_type === 'whatsapp');
     if (whatsappChannel) {
-      await sendWhatsAppMessage(business, whatsappChannel.channel_identifier, result.reply);
+      await sendWhatsAppMessage(business, whatsappChannel.channel_identifier, replyText);
     }
   } else if (conversation.channel_type === 'instagram') {
-    // Deferred to Instagram.js via a shared relay function to avoid a
-    // circular import between WhatsApp.js and Instagram.js.
     if (relayToInstagram) {
       const igChannel = conversation.customer_channels?.find(c => c.channel_type === 'instagram');
       if (igChannel) {
-        await relayToInstagram(business, igChannel.channel_identifier, result.reply);
+        await relayToInstagram(business, igChannel.channel_identifier, replyText);
       }
     } else {
       console.error('relayToInstagram not registered — cannot deliver owner reply to Instagram customer');
     }
   }
-
-  await saveMessage(conversation.id, 'assistant', result.reply);
-  await updateConversationStatus(conversation.id, 'active');
 }
 
 // Instagram.js registers its send function here at startup, avoiding a
