@@ -185,6 +185,70 @@ async function getAwaitingOwnerConversations(businessId) {
   return conversations;
 }
 
+// Fetches one conversation by ID with its customer_channels populated,
+// used by the send_message_to_customer tool to know where to actually
+// deliver a message once the AI has decided which conversation to use.
+async function getConversationById(conversationId) {
+  const { data: conversation, error } = await supabase
+    .from('conversations')
+    .select('*, customers(*)')
+    .eq('id', conversationId)
+    .single();
+
+  if (error || !conversation) {
+    console.error('Error fetching conversation by id:', error?.message);
+    return null;
+  }
+
+  const { data: channels } = await supabase
+    .from('customer_channels')
+    .select('channel_type, channel_identifier')
+    .eq('customer_id', conversation.customer_id);
+
+  conversation.customer_channels = channels || [];
+  return conversation;
+}
+
+// Finds whichever conversation this business most recently pinged the
+// owner about, regardless of current status. Used as a fallback when
+// nothing is actively awaiting_owner, but the owner is still following
+// up on something after the fact (e.g. "have you sent it" after the
+// conversation already moved back to active).
+async function getMostRecentlyPingedConversation(businessId) {
+  const { data: lastPing, error } = await supabase
+    .from('messages')
+    .select('conversation_id, created_at, conversations!inner(business_id)')
+    .eq('role', 'owner_ping')
+    .eq('conversations.business_id', businessId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !lastPing) {
+    if (error) console.error('Error fetching most recently pinged conversation:', error.message);
+    return null;
+  }
+
+  const { data: conversation, error: convError } = await supabase
+    .from('conversations')
+    .select('*, customers(*)')
+    .eq('id', lastPing.conversation_id)
+    .single();
+
+  if (convError || !conversation) {
+    console.error('Error fetching conversation for most recent ping:', convError?.message);
+    return null;
+  }
+
+  const { data: channels } = await supabase
+    .from('customer_channels')
+    .select('channel_type, channel_identifier')
+    .eq('customer_id', conversation.customer_id);
+
+  conversation.customer_channels = channels || [];
+  return conversation;
+}
+
 // ============================================
 // MESSAGES
 // Every message is saved automatically — no AI judgment needed here.
@@ -247,6 +311,118 @@ async function getNotes(conversationId) {
 }
 
 // ============================================
+// CONVERSATION TAGS
+// Small fixed set of status tags the bot applies/removes on its own
+// judgment: awaiting_response, gone_quiet, potential_followup, completed.
+// ============================================
+
+async function addTag(conversationId, tag) {
+  const { error } = await supabase
+    .from('conversation_tags')
+    .insert({ conversation_id: conversationId, tag });
+
+  if (error) {
+    console.error('Error adding tag:', error.message);
+  }
+}
+
+async function removeTag(conversationId, tag) {
+  const { error } = await supabase
+    .from('conversation_tags')
+    .delete()
+    .eq('conversation_id', conversationId)
+    .eq('tag', tag);
+
+  if (error) {
+    console.error('Error removing tag:', error.message);
+  }
+}
+
+async function getTags(conversationId) {
+  const { data, error } = await supabase
+    .from('conversation_tags')
+    .select('tag')
+    .eq('conversation_id', conversationId);
+
+  if (error) {
+    console.error('Error fetching tags:', error.message);
+    return [];
+  }
+  return data.map(row => row.tag);
+}
+
+// ============================================
+// OWNER TOOL-CALLING SUPPORT
+// Backing functions for the two tools the AI can call when answering
+// an owner's message: one for full detail on a single conversation,
+// one for a lightweight status sweep across many.
+// ============================================
+
+// Tool: get_conversation_history
+// Full message history, notes, and tags for one specific conversation.
+async function getConversationFullContext(conversationId) {
+  const messages = await getRecentMessages(conversationId, 30);
+  const notes = await getNotes(conversationId);
+  const tags = await getTags(conversationId);
+
+  const { data: conversation, error } = await supabase
+    .from('conversations')
+    .select('*, customers(*)')
+    .eq('id', conversationId)
+    .single();
+
+  if (error) {
+    console.error('Error fetching conversation for full context:', error.message);
+    return null;
+  }
+
+  return {
+    conversation_id: conversationId,
+    channel: conversation.channel_type,
+    status: conversation.status,
+    messages,
+    notes: notes.map(n => n.note),
+    tags,
+  };
+}
+
+// Tool: get_recent_customer_statuses
+// Lightweight sweep across recent conversations for this business —
+// tags, status, and notes only, deliberately excludes message content
+// to keep this compact for "who's waiting / who went quiet" style
+// questions that don't need full transcripts.
+async function getRecentCustomerStatuses(businessId, hoursBack = 48) {
+  const cutoff = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+
+  const { data: conversations, error } = await supabase
+    .from('conversations')
+    .select('id, channel_type, status, created_at')
+    .eq('business_id', businessId)
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching recent customer statuses:', error.message);
+    return [];
+  }
+
+  const results = [];
+  for (const conv of conversations) {
+    const tags = await getTags(conv.id);
+    const notes = await getNotes(conv.id);
+    results.push({
+      conversation_id: conv.id,
+      channel: conv.channel_type,
+      status: conv.status,
+      tags,
+      notes: notes.map(n => n.note),
+      created_at: conv.created_at,
+    });
+  }
+  return results;
+}
+
+// ============================================
 // BUSINESS SETTINGS
 // Rules/tone/policies configured per business, read on every reply.
 // ============================================
@@ -296,4 +472,11 @@ module.exports = {
   getBusinessSettings,
   getBusinessKnowledge,
   getAwaitingOwnerConversations,
+  getConversationById,
+  getMostRecentlyPingedConversation,
+  addTag,
+  removeTag,
+  getTags,
+  getConversationFullContext,
+  getRecentCustomerStatuses,
 };
