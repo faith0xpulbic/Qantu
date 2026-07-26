@@ -10,6 +10,9 @@ const {
   getNotes,
   getBusinessSettings,
   getBusinessKnowledge,
+  setTag,
+  getTag,
+  updateCustomerName,
 } = require('./Database');
 const { processMessage } = require('./Bot');
 const { pingOwner, registerInstagramRelay } = require('./WhatsApp');
@@ -104,8 +107,9 @@ async function handleIncomingInstagramMessage(body) {
   const businessKnowledge = await getBusinessKnowledge(business.id);
   const notes = await getNotes(conversation.id);
   const recentMessages = await getRecentMessages(conversation.id);
+  const currentTag = await getTag(conversation.id);
 
-  const context = { businessSettings, businessKnowledge, notes, recentMessages };
+  const context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag };
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
@@ -118,6 +122,14 @@ async function handleIncomingInstagramMessage(body) {
 
   if (result.save_note) {
     await saveNote(conversation.id, result.save_note);
+  }
+
+  if (result.tag) {
+    await setTag(conversation.id, result.tag);
+  }
+
+  if (result.customer_name) {
+    await updateCustomerName(customer.id, result.customer_name);
   }
 
   // All owner pings route to WhatsApp regardless of source channel
