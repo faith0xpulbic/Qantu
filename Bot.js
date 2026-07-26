@@ -28,13 +28,17 @@ const RESPONSE_SCHEMA = {
     action_reason: { type: 'string', nullable: true },
     owner_summary: { type: 'string', nullable: true },
     save_note: { type: 'string', nullable: true },
+    tag: { type: 'string', enum: ['needs_followup', 'none'], nullable: true },
+    customer_name: { type: 'string', nullable: true },
   },
   required: ['reply', 'action'],
 };
 
 // Builds the final system prompt by injecting this business's settings,
-// its factual knowledge, and the bot's own notes about this conversation.
-function buildSystemPrompt(businessSettings, businessKnowledge, notes) {
+// its factual knowledge, the bot's own notes, and the conversation's
+// current tag, so it can decide whether to keep, clear, or change it
+// with actual context, rather than blindly overwriting each turn.
+function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag) {
   let prompt = SYSTEM_PROMPT;
 
   const settingsEntries = Object.entries(businessSettings || {});
@@ -57,6 +61,8 @@ function buildSystemPrompt(businessSettings, businessKnowledge, notes) {
     prompt += `\n\nYOUR OWN NOTES ABOUT THIS CONVERSATION SO FAR:\n${notesText}`;
   }
 
+  prompt += `\n\nCURRENT TAG ON THIS CONVERSATION: ${currentTag || 'none'}. If it's already "needs_followup" and this message resolves what you were waiting on (e.g. they paid, they answered, they came back), clear it by returning "none". If nothing has changed, keep returning the same tag. Only set "needs_followup" fresh if something new is now unresolved.`;
+
   return prompt;
 }
 
@@ -76,11 +82,11 @@ function formatGap(previousTimestamp, currentTimestamp) {
   return `[over a week later]`;
 }
 
-// context = { businessSettings, businessKnowledge, notes, recentMessages }
+// context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag }
 async function processMessage(context, text, mediaUrl = null) {
-  const { businessSettings, businessKnowledge, notes, recentMessages } = context;
+  const { businessSettings, businessKnowledge, notes, recentMessages, currentTag } = context;
 
-  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes);
+  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag);
 
   // Gemini's format: each turn is a 'content' object with role 'user' or
   // 'model' (not 'assistant'), and text lives inside a 'parts' array.
@@ -156,6 +162,8 @@ async function processMessage(context, text, mediaUrl = null) {
         action_reason: parsed.action_reason || null,
         owner_summary: parsed.owner_summary || null,
         save_note: parsed.save_note || null,
+        tag: parsed.tag && parsed.tag !== 'none' ? parsed.tag : null,
+        customer_name: parsed.customer_name || null,
       };
     } catch (parseErr) {
       console.error('Failed to parse Gemini response as JSON:', rawText);
@@ -165,6 +173,8 @@ async function processMessage(context, text, mediaUrl = null) {
         action_reason: null,
         owner_summary: null,
         save_note: null,
+        tag: null,
+        customer_name: null,
       };
     }
   } catch (err) {
@@ -278,7 +288,7 @@ async function processOwnerMessage(ownerContext, ownerText, dbFunctions) {
 
   if (recentOwnerContext && recentOwnerContext.length > 0) {
     const contextText = recentOwnerContext
-      .map(c => `conversation_id: ${c.conversation_id}, channel: ${c.channel}, status: ${c.status}, tags: [${(c.tags || []).join(', ')}], last ping: "${c.lastPing}"`)
+      .map(c => `conversation_id: ${c.conversation_id}, channel: ${c.channel}, status: ${c.status}, tag: ${c.tag || 'none'}, last ping: "${c.lastPing}"`)
       .join('\n');
     systemPrompt += `\n\nRECENT CONVERSATIONS YOU'VE BROUGHT TO THE OWNER'S ATTENTION (most recent first):\n${contextText}`;
   }
