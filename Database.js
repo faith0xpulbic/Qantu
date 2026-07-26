@@ -34,6 +34,17 @@ async function getBusinessByInstagramAccountId(instagramAccountId) {
   return data;
 }
 
+async function updateCustomerName(customerId, name) {
+  const { error } = await supabase
+    .from('customers')
+    .update({ name })
+    .eq('id', customerId);
+
+  if (error) {
+    console.error('Error updating customer name:', error.message);
+  }
+}
+
 // ============================================
 // CUSTOMER + CHANNEL LOOKUP
 // Given a business and a channel identifier (phone number or IG user ID),
@@ -311,44 +322,36 @@ async function getNotes(conversationId) {
 }
 
 // ============================================
-// CONVERSATION TAGS
-// Small fixed set of status tags the bot applies/removes on its own
-// judgment: awaiting_response, gone_quiet, potential_followup, completed.
+// CONVERSATION TAG
+// A single, simple status flag on the conversation itself, one at a time:
+// 'needs_followup' (customer went quiet or asked something unresolved),
+// or null (nothing notable). Kept as a plain column rather than a
+// separate table since only one meaningful value is ever needed at once.
 // ============================================
 
-async function addTag(conversationId, tag) {
+async function setTag(conversationId, tag) {
   const { error } = await supabase
-    .from('conversation_tags')
-    .insert({ conversation_id: conversationId, tag });
+    .from('conversations')
+    .update({ tag })
+    .eq('id', conversationId);
 
   if (error) {
-    console.error('Error adding tag:', error.message);
+    console.error('Error setting tag:', error.message);
   }
 }
 
-async function removeTag(conversationId, tag) {
-  const { error } = await supabase
-    .from('conversation_tags')
-    .delete()
-    .eq('conversation_id', conversationId)
-    .eq('tag', tag);
-
-  if (error) {
-    console.error('Error removing tag:', error.message);
-  }
-}
-
-async function getTags(conversationId) {
+async function getTag(conversationId) {
   const { data, error } = await supabase
-    .from('conversation_tags')
+    .from('conversations')
     .select('tag')
-    .eq('conversation_id', conversationId);
+    .eq('id', conversationId)
+    .single();
 
   if (error) {
-    console.error('Error fetching tags:', error.message);
-    return [];
+    console.error('Error fetching tag:', error.message);
+    return null;
   }
-  return data.map(row => row.tag);
+  return data?.tag || null;
 }
 
 // ============================================
@@ -359,11 +362,10 @@ async function getTags(conversationId) {
 // ============================================
 
 // Tool: get_conversation_history
-// Full message history, notes, and tags for one specific conversation.
+// Full message history, notes, and tag for one specific conversation.
 async function getConversationFullContext(conversationId) {
   const messages = await getRecentMessages(conversationId, 30);
   const notes = await getNotes(conversationId);
-  const tags = await getTags(conversationId);
 
   const { data: conversation, error } = await supabase
     .from('conversations')
@@ -382,13 +384,13 @@ async function getConversationFullContext(conversationId) {
     status: conversation.status,
     messages,
     notes: notes.map(n => n.note),
-    tags,
+    tag: conversation.tag,
   };
 }
 
 // Tool: get_recent_customer_statuses
 // Lightweight sweep across recent conversations for this business —
-// tags, status, and notes only, deliberately excludes message content
+// tag, status, and notes only, deliberately excludes message content
 // to keep this compact for "who's waiting / who went quiet" style
 // questions that don't need full transcripts.
 async function getRecentCustomerStatuses(businessId, hoursBack = 48) {
@@ -396,7 +398,7 @@ async function getRecentCustomerStatuses(businessId, hoursBack = 48) {
 
   const { data: conversations, error } = await supabase
     .from('conversations')
-    .select('id, channel_type, status, created_at')
+    .select('id, channel_type, status, tag, created_at')
     .eq('business_id', businessId)
     .gte('created_at', cutoff)
     .order('created_at', { ascending: false });
@@ -408,13 +410,12 @@ async function getRecentCustomerStatuses(businessId, hoursBack = 48) {
 
   const results = [];
   for (const conv of conversations) {
-    const tags = await getTags(conv.id);
     const notes = await getNotes(conv.id);
     results.push({
       conversation_id: conv.id,
       channel: conv.channel_type,
       status: conv.status,
-      tags,
+      tag: conv.tag,
       notes: notes.map(n => n.note),
       created_at: conv.created_at,
     });
@@ -460,6 +461,7 @@ async function getBusinessKnowledge(businessId) {
 }
 
 module.exports = {
+  updateCustomerName,
   getBusinessByWhatsAppPhoneNumberId,
   getBusinessByInstagramAccountId,
   findOrCreateCustomer,
@@ -474,9 +476,8 @@ module.exports = {
   getAwaitingOwnerConversations,
   getConversationById,
   getMostRecentlyPingedConversation,
-  addTag,
-  removeTag,
-  getTags,
+  setTag,
+  getTag,
   getConversationFullContext,
   getRecentCustomerStatuses,
 };
