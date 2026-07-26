@@ -13,6 +13,9 @@ const {
   getConversationById,
   getConversationFullContext,
   getRecentCustomerStatuses,
+  setTag,
+  getTag,
+  updateCustomerName,
 } = require('./Database');
 const { processMessage, processOwnerMessage } = require('./Bot');
 const { embedReference, extractReference, stripReference } = require('./MessageRefs');
@@ -86,6 +89,8 @@ async function handleOwnerReply(business, text) {
   const businessSettings = await getBusinessSettings(business.id);
   const businessKnowledge = await getBusinessKnowledge(business.id);
 
+  let touchedConversationId = null;
+
   const dbFunctions = {
     getConversationFullContext,
     getRecentCustomerStatuses,
@@ -97,6 +102,7 @@ async function handleOwnerReply(business, text) {
       await relayMessageToCustomer(business, conversation, message);
       await saveMessage(conversationId, 'assistant', message);
       await updateConversationStatus(conversationId, 'active');
+      touchedConversationId = conversationId;
       return true;
     },
   };
@@ -108,6 +114,16 @@ async function handleOwnerReply(business, text) {
   );
 
   await sendWhatsAppMessage(business, business.owner_contact, result.reply);
+
+  // Save the bot's final reply to the owner as real history too, so future
+  // owner questions ("did you tell them X") can look back on what it
+  // already confirmed, not just the relay action itself. Falls back to
+  // the most recent conversation in automatic context if no tool call
+  // happened to touch a specific one this turn.
+  const conversationToLog = touchedConversationId || recentOwnerContext?.[0]?.conversation_id;
+  if (conversationToLog) {
+    await saveMessage(conversationToLog, 'owner_ping', result.reply);
+  }
 }
 
 // Builds a compact list of the business's most recent owner_ping messages
@@ -127,7 +143,7 @@ async function getRecentOwnerPingSummaries(businessId, limit = 5) {
         conversation_id: conv.conversation_id,
         channel: conv.channel,
         status: conv.status,
-        tags: conv.tags,
+        tag: conv.tag,
         lastPing: stripReference(lastPing.content),
       });
     }
@@ -222,13 +238,14 @@ async function handleIncomingWhatsAppMessage(body) {
     : text;
   await saveMessage(conversation.id, 'customer', customerContent);
 
-  // Gather context for the bot: business rules, business info, its own notes, recent messages
+  // Gather context for the bot: business rules, business info, its own notes, recent messages, current tag
   const businessSettings = await getBusinessSettings(business.id);
   const businessKnowledge = await getBusinessKnowledge(business.id);
   const notes = await getNotes(conversation.id);
   const recentMessages = await getRecentMessages(conversation.id);
+  const currentTag = await getTag(conversation.id);
 
-  const context = { businessSettings, businessKnowledge, notes, recentMessages };
+  const context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag };
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
@@ -241,6 +258,14 @@ async function handleIncomingWhatsAppMessage(body) {
 
   if (result.save_note) {
     await saveNote(conversation.id, result.save_note);
+  }
+
+  if (result.tag) {
+    await setTag(conversation.id, result.tag);
+  }
+
+  if (result.customer_name) {
+    await updateCustomerName(customer.id, result.customer_name);
   }
 
   if (result.action === 'PING_OWNER' && result.owner_summary) {
