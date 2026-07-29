@@ -67,6 +67,25 @@ app.post('/voice/incoming', (req, res) => {
   `);
 });
 
+app.post('/voice/process', async (req, res) => {
+  try {
+    await handleVoiceProcess(req, res);
+  } catch (err) {
+    console.error('Error in /voice/process:', err);
+    res.json({ reply: "Sorry, we're having trouble right now." });
+  }
+});
+
+app.post('/voice/end', async (req, res) => {
+  try {
+    await handleVoiceEnd(req, res);
+  } catch (err) {
+    console.error('Error in /voice/end:', err);
+    res.json({ ok: false });
+  }
+});
+
+
 // Webhook verification — Meta calls this once when you save the webhook URL
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
