@@ -13,12 +13,12 @@ from pipecat.transports.network.fastapi_websocket import (
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.google import GoogleTTSService
+from pipecat.services.google.tts import GeminiTTSService, GeminiTTSSettings
 
 # ── Config ───────────────────────────────────────────────────────
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-# Google TTS uses GOOGLE_APPLICATION_CREDENTIALS env var automatically
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")        # Same key you use for Gemini 3.6
 
 app = FastAPI()
 
@@ -27,7 +27,7 @@ class NodeJSBridge(FrameProcessor):
     """
     Catches STT transcriptions, maintains the full in-memory transcript,
     calls Node.js /voice/process for Gemini 3.6 reasoning, and pushes
-    the reply text into the TTS pipeline.
+    the reply text into the Gemini 3.1 TTS pipeline.
     """
 
     def __init__(self, api_url: str):
@@ -161,13 +161,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
 
-    # Native Google Cloud TTS — swap voice_id as needed
-    # Requires GOOGLE_APPLICATION_CREDENTIALS env var pointing to a service-account JSON
-    tts = GoogleTTSService(voice_id="en-US-Neural2-D")
-
-    # TODO: When you get Gemini 3.1 TTS docs, replace GoogleTTSService above
-    # with a custom Gemini31TTSService FrameProcessor that sits here instead.
-    # It would receive TextFrame, call the Gemini audio API, yield AudioRawFrames.
+    # Native Gemini 3.1 TTS — exactly as you specified
+    tts = GeminiTTSService(
+        api_key=GOOGLE_API_KEY,
+        settings=GeminiTTSSettings(
+            model="gemini-3.1-flash-tts",
+            voice="Aoede",  # Options: Puck, Charon, Aoede, Fenrir, Kore
+            prompt="Speak naturally in a calm, professional tone at standard speaking pace."
+        )
+    )
 
     bridge = NodeJSBridge(api_url=NODEJS_API_URL)
     bridge.meta = {
