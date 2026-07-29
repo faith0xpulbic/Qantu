@@ -460,6 +460,140 @@ async function getBusinessKnowledge(businessId) {
   return data;
 }
 
+
+// ============================================================
+//  VOICE / CALLS HELPERS (Add to existing Database.js)
+// ============================================================
+
+async function getBusinessByTwilioNumber(twilioNumber) {
+  try {
+    const { data, error } = await supabase
+      .from('businesses')
+      .select('*')
+      .eq('twilio_phone_number', twilioNumber)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DB] getBusinessByTwilioNumber error:', error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error('[DB] getBusinessByTwilioNumber exception:', err);
+    return null;
+  }
+}
+
+async function createCallRecord({
+  call_sid,
+  from_number,
+  to_number,
+  business_id,
+  conversation_id,
+  status = 'in_progress',
+  started_at = new Date(),
+}) {
+  try {
+    const { data, error } = await supabase
+      .from('calls')
+      .insert({
+        call_sid,
+        from_number,
+        to_number,
+        business_id,
+        conversation_id,
+        status,
+        started_at: started_at.toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[DB] createCallRecord error:', error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error('[DB] createCallRecord exception:', err);
+    return null;
+  }
+}
+
+async function updateCallStatus(call_sid, status, ended_at = new Date()) {
+  try {
+    const { error } = await supabase
+      .from('calls')
+      .update({
+        status,
+        ended_at: ended_at.toISOString(),
+      })
+      .eq('call_sid', call_sid);
+
+    if (error) {
+      console.error('[DB] updateCallStatus error:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[DB] updateCallStatus exception:', err);
+    return false;
+  }
+}
+
+async function saveCallSummaryAndNote({ call_sid, summary, sentiment, conversation_id }) {
+  try {
+    // 1. Update the calls table
+    const { error: callError } = await supabase
+      .from('calls')
+      .update({ summary, sentiment })
+      .eq('call_sid', call_sid);
+
+    if (callError) {
+      console.error('[DB] saveCallSummaryAndNote call update error:', callError);
+      return false;
+    }
+
+    // 2. Save summary as a conversation_note (so future text/voice sees it)
+    if (conversation_id && summary) {
+      const { error: noteError } = await supabase
+        .from('conversation_notes')
+        .insert({
+          conversation_id,
+          content: summary,
+          source: 'voice_call_summary',
+        });
+
+      if (noteError) {
+        console.error('[DB] saveCallSummaryAndNote note insert error:', noteError);
+        // Don't return false – the call summary is already saved.
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error('[DB] saveCallSummaryAndNote exception:', err);
+    return false;
+  }
+}
+
+async function getCallBySid(call_sid) {
+  try {
+    const { data, error } = await supabase
+      .from('calls')
+      .select('*')
+      .eq('call_sid', call_sid)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[DB] getCallBySid error:', error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error('[DB] getCallBySid exception:', err);
+    return null;
+  }
+}
+
 module.exports = {
   updateCustomerName,
   getBusinessByWhatsAppPhoneNumberId,
@@ -480,4 +614,9 @@ module.exports = {
   getTag,
   getConversationFullContext,
   getRecentCustomerStatuses,
+  getBusinessByTwilioNumber,
+  createCallRecord,
+  updateCallStatus,
+  saveCallSummaryAndNote,
+  getCallBySid,
 };
