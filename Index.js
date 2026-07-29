@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 
-const { handleIncomingWhatsAppMessage } = require('./Whatsapp');
+const { handleIncomingWhatsAppMessage } = require('./WhatsApp');
 const { handleIncomingInstagramMessage } = require('./Instagram');
 
 const app = express();
