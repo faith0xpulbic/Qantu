@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { SYSTEM_PROMPT } = require('./prompts');
+const { SYSTEM_PROMPT, VOICE_CALL_ADDENDUM } = require('./prompts');
 
 // Guaranteed cleanup, independent of whether the model follows the prompt
 // instruction. Strips dashes and brackets/parentheses since these read as
@@ -38,8 +38,15 @@ const RESPONSE_SCHEMA = {
 // its factual knowledge, the bot's own notes, and the conversation's
 // current tag, so it can decide whether to keep, clear, or change it
 // with actual context, rather than blindly overwriting each turn.
-function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag) {
+// channelType switches in the voice-specific addendum when this is a call,
+// left out entirely for WhatsApp/Instagram so the text-channel prompt
+// stays exactly as it was.
+function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType) {
   let prompt = SYSTEM_PROMPT;
+
+  if (channelType === 'call') {
+    prompt += VOICE_CALL_ADDENDUM;
+  }
 
   const settingsEntries = Object.entries(businessSettings || {});
   if (settingsEntries.length > 0) {
@@ -82,11 +89,11 @@ function formatGap(previousTimestamp, currentTimestamp) {
   return `[over a week later]`;
 }
 
-// context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag }
+// context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType }
 async function processMessage(context, text, mediaUrl = null) {
-  const { businessSettings, businessKnowledge, notes, recentMessages, currentTag } = context;
+  const { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType } = context;
 
-  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag);
+  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType);
 
   // Gemini's format: each turn is a 'content' object with role 'user' or
   // 'model' (not 'assistant'), and text lives inside a 'parts' array.
