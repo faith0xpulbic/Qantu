@@ -12,6 +12,7 @@ from pipecat.transports.network.fastapi_websocket import (
     FastAPIWebsocketParams,
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.services.deepgram import DeepgramSTTService
 from pipecat.services.google.tts import GeminiTTSService, GeminiTTSSettings
 
@@ -155,6 +156,10 @@ async def websocket_endpoint(websocket: WebSocket):
         params=FastAPIWebsocketParams(
             audio_out_enabled=True,
             add_wav_header=False,
+            vad_enabled=True,
+            vad_analyzer=SileroVADAnalyzer(),   # detects when the caller
+            vad_audio_passthrough=True,         # starts speaking, this is
+                                                  # what makes barge-in real
             serializer=TwilioFrameSerializer(stream_sid),
         ),
     )
