@@ -159,16 +159,28 @@ class NodeJSBridge(FrameProcessor):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
-    # Twilio always sends a "start" event first with call metadata
+    # Twilio sends a "connected" event first (handshake ack, no metadata),
+    # THEN a "start" event with the actual call metadata we need.
+    # Docs: https://www.twilio.com/docs/voice/media-streams/websocket-messages
+    start_msg = None
     try:
-        start_msg = await websocket.receive_json()
+        for _ in range(5):  # small bound so a malformed stream can't hang forever
+            msg = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+            event = msg.get("event")
+            if event == "connected":
+                print("[ws] Received 'connected' handshake event, waiting for 'start'...")
+                continue
+            if event == "start":
+                start_msg = msg
+                break
+            print(f"[ws] Unexpected event before 'start': {event}")
     except Exception as e:
         print(f"[ws] Failed to receive/parse start event: {e}")
         await websocket.close()
         return
 
-    if start_msg.get("event") != "start":
-        print(f"[ws] First event was not 'start': {start_msg.get('event')}")
+    if start_msg is None:
+        print("[ws] Never received a 'start' event")
         await websocket.close()
         return
 
