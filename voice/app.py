@@ -250,8 +250,16 @@ async def websocket_endpoint(websocket: WebSocket):
         # documented model list for GeminiTTSService (which only names
         # gemini-2.5-flash-tts / gemini-2.5-pro-tts) — `model` is a passthrough
         # string though, so this should work; worth a smoke test against your key.
+        #
+        # use_genai=True is required: without it, GeminiTTSService defaults to
+        # the Google Cloud TTS backend, which looks for full GCP service-account
+        # credentials (GOOGLE_APPLICATION_CREDENTIALS) and ignores api_key
+        # entirely — causing "No valid credentials provided." even with a
+        # correct API key set. use_genai=True forces the lightweight
+        # google-genai client, which is what actually accepts api_key auth.
         tts = GeminiTTSService(
             api_key=GOOGLE_API_KEY,
+            use_genai=True,
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
