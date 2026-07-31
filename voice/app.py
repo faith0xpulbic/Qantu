@@ -26,6 +26,7 @@ for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEE
         print(f"[startup] WARNING: env var {_name} is not set")
 
 app = FastAPI()
+print("[startup] app.py version: connected-event-fix-v2")
 
 
 @app.post("/voice")
@@ -157,7 +158,9 @@ class NodeJSBridge(FrameProcessor):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    print("[ws] Handler entered, accepting connection...", flush=True)
     await websocket.accept()
+    print("[ws] Connection accepted, waiting for first message...", flush=True)
 
     # Twilio sends a "connected" event first (handshake ack, no metadata),
     # THEN a "start" event with the actual call metadata we need.
