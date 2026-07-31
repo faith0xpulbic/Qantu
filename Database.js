@@ -34,6 +34,20 @@ async function getBusinessByInstagramAccountId(instagramAccountId) {
   return data;
 }
 
+async function getBusinessByTwilioNumber(twilioNumber) {
+  const { data, error } = await supabase
+    .from('businesses')
+    .select('*')
+    .eq('twilio_phone_number', twilioNumber)
+    .single();
+
+  if (error) {
+    console.error('Error looking up business by Twilio number:', error.message);
+    return null;
+  }
+  return data;
+}
+
 async function updateCustomerName(customerId, name) {
   const { error } = await supabase
     .from('customers')
@@ -84,7 +98,7 @@ async function findOrCreateCustomer(businessId, channelType, channelIdentifier) 
     .from('customers')
     .insert({
       business_id: businessId,
-      primary_phone: channelType === 'whatsapp' ? channelIdentifier : null,
+      primary_phone: (channelType === 'whatsapp' || channelType === 'call') ? channelIdentifier : null,
     })
     .select()
     .single();
@@ -460,10 +474,72 @@ async function getBusinessKnowledge(businessId) {
   return data;
 }
 
+// ============================================
+// CALLS
+// Separate from 'conversations' — this table holds call-specific fields
+// (call_sid, from/to numbers, status, timing) that don't belong on the
+// generic conversations table shared across all channels.
+// ============================================
+
+async function createCall({ businessId, conversationId, callSid, fromNumber, toNumber }) {
+  const { data, error } = await supabase
+    .from('calls')
+    .insert({
+      business_id: businessId,
+      conversation_id: conversationId,
+      call_sid: callSid,
+      from_number: fromNumber,
+      to_number: toNumber,
+      status: 'in_progress',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating call record:', error.message);
+    return null;
+  }
+  return data;
+}
+
+async function getCallBySid(callSid) {
+  const { data, error } = await supabase
+    .from('calls')
+    .select('*')
+    .eq('call_sid', callSid)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching call by sid:', error.message);
+    return null;
+  }
+  return data;
+}
+
+async function completeCall(callSid, { summary, sentiment = null } = {}) {
+  const { error } = await supabase
+    .from('calls')
+    .update({
+      status: 'completed',
+      ended_at: new Date().toISOString(),
+      summary,
+      sentiment,
+    })
+    .eq('call_sid', callSid);
+
+  if (error) {
+    console.error('Error completing call record:', error.message);
+  }
+}
+
 module.exports = {
   updateCustomerName,
   getBusinessByWhatsAppPhoneNumberId,
   getBusinessByInstagramAccountId,
+  getBusinessByTwilioNumber,
+  createCall,
+  getCallBySid,
+  completeCall,
   findOrCreateCustomer,
   getOrCreateActiveConversation,
   updateConversationStatus,
