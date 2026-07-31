@@ -14,7 +14,7 @@ from pipecat.transports.network.fastapi_websocket import (
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.google.tts import GeminiTTSService, GeminiTTSSettings
+from pipecat.services.google import GeminiTTSService
 
 # ── Config ───────────────────────────────────────────────────────
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
@@ -166,12 +166,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
 
-    # Native Gemini 3.1 TTS — exactly as you specified
+    # Gemini TTS — pipecat-ai 1.4.0 API (Settings replaces old params/GeminiTTSSettings)
     tts = GeminiTTSService(
         api_key=GOOGLE_API_KEY,
-        settings=GeminiTTSSettings(
-            model="gemini-3.1-flash-tts",
-            voice="Aoede",  # Options: Puck, Charon, Aoede, Fenrir, Kore
+        settings=GeminiTTSService.Settings(
+            model="gemini-2.5-flash-tts",
+            voice="Kore",  # Documented options: Kore, Charon, Puck, Zephyr
             prompt="Speak naturally in a calm, professional tone at standard speaking pace."
         )
     )
