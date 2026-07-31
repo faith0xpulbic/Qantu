@@ -21,6 +21,10 @@ NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onr
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")        # Same key you use for Gemini 3.6
 
+for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY", GOOGLE_API_KEY)]:
+    if not _val:
+        print(f"[startup] WARNING: env var {_name} is not set")
+
 app = FastAPI()
 
 
@@ -156,66 +160,87 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     # Twilio always sends a "start" event first with call metadata
-    start_msg = await websocket.receive_json()
-    if start_msg.get("event") != "start":
+    try:
+        start_msg = await websocket.receive_json()
+    except Exception as e:
+        print(f"[ws] Failed to receive/parse start event: {e}")
         await websocket.close()
         return
 
-    stream_sid = start_msg["start"]["streamSid"]
-    call_sid = start_msg["start"]["callSid"]
-    from_number = start_msg["start"]["from"]
-    to_number = start_msg["start"]["to"]
+    if start_msg.get("event") != "start":
+        print(f"[ws] First event was not 'start': {start_msg.get('event')}")
+        await websocket.close()
+        return
+
+    try:
+        stream_sid = start_msg["start"]["streamSid"]
+        call_sid = start_msg["start"]["callSid"]
+        from_number = start_msg["start"]["from"]
+        to_number = start_msg["start"]["to"]
+    except KeyError as e:
+        print(f"[ws] start event missing expected field: {e}. Payload: {start_msg}")
+        await websocket.close()
+        return
+
+    print(f"[ws] Call started — call_sid={call_sid} from={from_number} to={to_number}")
 
     # ── Pipecat pipeline setup ──────────────────────────────────────
-    transport = FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            audio_out_enabled=True,
-            add_wav_header=False,
-            vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),   # detects when the caller
-            vad_audio_passthrough=True,         # starts speaking, this is
-                                                  # what makes barge-in real
-            serializer=TwilioFrameSerializer(stream_sid),
-        ),
-    )
-
-    stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
-
-    # Gemini 3.1 Flash TTS (Preview) — streaming-capable, supports Aoede + 29
-    # other voices. Note: gemini-3.1-flash-tts-preview isn't in Pipecat's
-    # documented model list for GeminiTTSService (which only names
-    # gemini-2.5-flash-tts / gemini-2.5-pro-tts) — `model` is a passthrough
-    # string though, so this should work; worth a smoke test against your key.
-    tts = GeminiTTSService(
-        api_key=GOOGLE_API_KEY,
-        settings=GeminiTTSService.Settings(
-            model="gemini-3.1-flash-tts-preview",
-            voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
-            prompt="Speak naturally in a calm, professional tone at standard speaking pace."
+    try:
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_out_enabled=True,
+                add_wav_header=False,
+                vad_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(),   # detects when the caller
+                vad_audio_passthrough=True,         # starts speaking, this is
+                                                      # what makes barge-in real
+                serializer=TwilioFrameSerializer(stream_sid),
+            ),
         )
-    )
 
-    bridge = NodeJSBridge(api_url=NODEJS_API_URL)
-    bridge.meta = {
-        "call_sid": call_sid,
-        "from": from_number,
-        "to": to_number,
-    }
+        stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
 
-    pipeline = Pipeline([
-        transport.input(),
-        stt,
-        bridge,
-        tts,
-        transport.output(),
-    ])
+        # Gemini 3.1 Flash TTS (Preview) — streaming-capable, supports Aoede + 29
+        # other voices. Note: gemini-3.1-flash-tts-preview isn't in Pipecat's
+        # documented model list for GeminiTTSService (which only names
+        # gemini-2.5-flash-tts / gemini-2.5-pro-tts) — `model` is a passthrough
+        # string though, so this should work; worth a smoke test against your key.
+        tts = GeminiTTSService(
+            api_key=GOOGLE_API_KEY,
+            settings=GeminiTTSService.Settings(
+                model="gemini-3.1-flash-tts-preview",
+                voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
+                prompt="Speak naturally in a calm, professional tone at standard speaking pace."
+            )
+        )
 
-    task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
-    runner = PipelineRunner()
+        bridge = NodeJSBridge(api_url=NODEJS_API_URL)
+        bridge.meta = {
+            "call_sid": call_sid,
+            "from": from_number,
+            "to": to_number,
+        }
+
+        pipeline = Pipeline([
+            transport.input(),
+            stt,
+            bridge,
+            tts,
+            transport.output(),
+        ])
+
+        task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
+        runner = PipelineRunner()
+    except Exception as e:
+        print(f"[ws] Failed to construct pipeline for call_sid={call_sid}: {e}")
+        await websocket.close()
+        return
 
     # ── Run pipeline, guarantee /voice/end on disconnect ─────────────
     try:
         await runner.run(task)
+    except Exception as e:
+        print(f"[ws] Pipeline run failed for call_sid={call_sid}: {e}")
     finally:
         await bridge.call_end()
