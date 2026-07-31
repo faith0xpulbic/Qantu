@@ -34,12 +34,25 @@ async def voice_webhook(request: Request):
     """
     Twilio's 'A call comes in' webhook. Returns TwiML instructing Twilio
     to open a Media Stream to our /ws websocket endpoint.
+
+    Twilio's Media Streams 'start' event does NOT include From/To natively
+    (confirmed against Twilio docs) — so we pass them through explicitly as
+    <Parameter> tags, which Twilio delivers back inside start.customParameters.
     """
+    form = await request.form()
+    from_number = form.get("From", "")
+    to_number = form.get("To", "")
+    call_sid = form.get("CallSid", "")
+
     host = request.url.hostname  # e.g. qantu-1.onrender.com
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="wss://{host}/ws" />
+        <Stream url="wss://{host}/ws">
+            <Parameter name="From" value="{from_number}" />
+            <Parameter name="To" value="{to_number}" />
+            <Parameter name="CallSid" value="{call_sid}" />
+        </Stream>
     </Connect>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
@@ -196,8 +209,9 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         stream_sid = start_msg["start"]["streamSid"]
         call_sid = start_msg["start"]["callSid"]
-        from_number = start_msg["start"]["from"]
-        to_number = start_msg["start"]["to"]
+        custom_params = start_msg["start"].get("customParameters", {})
+        from_number = custom_params.get("From", "")
+        to_number = custom_params.get("To", "")
     except KeyError as e:
         print(f"[ws] start event missing expected field: {e}. Payload: {start_msg}", flush=True)
         await websocket.close()
