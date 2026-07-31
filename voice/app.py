@@ -19,9 +19,9 @@ from pipecat.services.google.tts import GeminiTTSService
 # ── Config ───────────────────────────────────────────────────────
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")        # Same key you use for Gemini 3.6
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")  # accept either name
 
-for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY", GOOGLE_API_KEY)]:
+for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY / GEMINI_API_KEY", GOOGLE_API_KEY)]:
     if not _val:
         print(f"[startup] WARNING: env var {_name} is not set")
 
