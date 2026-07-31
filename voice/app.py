@@ -1,7 +1,7 @@
 import os
 import asyncio
 import aiohttp
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Request, Response
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
@@ -22,6 +22,22 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")        # Same key you use for Gemini 3.6
 
 app = FastAPI()
+
+
+@app.post("/voice")
+async def voice_webhook(request: Request):
+    """
+    Twilio's 'A call comes in' webhook. Returns TwiML instructing Twilio
+    to open a Media Stream to our /ws websocket endpoint.
+    """
+    host = request.url.hostname  # e.g. qantu-1.onrender.com
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="wss://{host}/ws" />
+    </Connect>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
 
 
 class NodeJSBridge(FrameProcessor):
