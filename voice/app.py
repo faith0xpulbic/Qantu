@@ -20,8 +20,10 @@ from pipecat.services.google.tts import GeminiTTSService
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")  # accept either name
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")  # from Twilio Console dashboard
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")    # from Twilio Console dashboard
 
-for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY / GEMINI_API_KEY", GOOGLE_API_KEY)]:
+for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY / GEMINI_API_KEY", GOOGLE_API_KEY), ("TWILIO_ACCOUNT_SID", TWILIO_ACCOUNT_SID), ("TWILIO_AUTH_TOKEN", TWILIO_AUTH_TOKEN)]:
     if not _val:
         print(f"[startup] WARNING: env var {_name} is not set")
 
@@ -232,7 +234,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 vad_analyzer=SileroVADAnalyzer(),   # detects when the caller
                 vad_audio_passthrough=True,         # starts speaking, this is
                                                       # what makes barge-in real
-                serializer=TwilioFrameSerializer(stream_sid),
+                serializer=TwilioFrameSerializer(
+                    stream_sid=stream_sid,
+                    call_sid=call_sid,
+                    account_sid=TWILIO_ACCOUNT_SID,
+                    auth_token=TWILIO_AUTH_TOKEN,
+                ),
             ),
         )
 
