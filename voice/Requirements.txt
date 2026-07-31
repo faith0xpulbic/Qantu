@@ -1,0 +1,5 @@
+pipecat-ai[deepgram,google,silero,twilio]==0.0.67
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-dotenv==1.0.1
+aiohttp==3.10.10
