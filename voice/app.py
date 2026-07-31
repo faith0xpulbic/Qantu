@@ -166,12 +166,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
     stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
 
-    # Gemini TTS — pipecat-ai 1.4.0 API (Settings replaces old params/GeminiTTSSettings)
+    # Gemini 3.1 Flash TTS (Preview) — streaming-capable, supports Aoede + 29
+    # other voices. Note: gemini-3.1-flash-tts-preview isn't in Pipecat's
+    # documented model list for GeminiTTSService (which only names
+    # gemini-2.5-flash-tts / gemini-2.5-pro-tts) — `model` is a passthrough
+    # string though, so this should work; worth a smoke test against your key.
     tts = GeminiTTSService(
         api_key=GOOGLE_API_KEY,
         settings=GeminiTTSService.Settings(
-            model="gemini-2.5-flash-tts",
-            voice="Kore",  # Documented options: Kore, Charon, Puck, Zephyr
+            model="gemini-3.1-flash-tts-preview",
+            voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
             prompt="Speak naturally in a calm, professional tone at standard speaking pace."
         )
     )
