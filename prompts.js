@@ -118,4 +118,3 @@ Everything above still applies, your personality, your authority as the owner, t
 - You cannot verify a payment during the call any more than you could over text, same rule applies, tell them you'll confirm and follow up.`;
 
 module.exports = { SYSTEM_PROMPT, VOICE_CALL_ADDENDUM };
-module.exports = { SYSTEM_PROMPT };
