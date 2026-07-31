@@ -1,5 +1,6 @@
 pipecat-ai[deepgram,google,silero,websocket]==1.4.0
-fastapi==0.115.0
+fastapi>=0.115.6,<1
 uvicorn[standard]==0.32.0
 python-dotenv==1.0.1
 aiohttp
+
