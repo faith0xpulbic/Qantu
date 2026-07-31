@@ -31,6 +31,32 @@ app = FastAPI()
 print("[startup] app.py version: connected-event-fix-v2")
 
 
+@app.on_event("startup")
+async def verify_google_key():
+    """Quick standalone check: is GOOGLE_API_KEY actually valid against
+    Google's API? Runs independent of Pipecat/pipeline construction so we
+    can tell 'bad key' apart from 'bad model name' without a live call."""
+    if not GOOGLE_API_KEY:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                params={"key": GOOGLE_API_KEY},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    names = [m.get("name", "") for m in data.get("models", [])]
+                    tts_models = [n for n in names if "tts" in n.lower()]
+                    print(f"[startup] GOOGLE_API_KEY is VALID. {len(names)} models visible. TTS models: {tts_models}", flush=True)
+                else:
+                    body = await resp.text()
+                    print(f"[startup] GOOGLE_API_KEY check FAILED — HTTP {resp.status}: {body[:300]}", flush=True)
+    except Exception as e:
+        print(f"[startup] GOOGLE_API_KEY check errored: {e}", flush=True)
+
+
 @app.post("/voice")
 async def voice_webhook(request: Request):
     """
@@ -246,20 +272,13 @@ async def websocket_endpoint(websocket: WebSocket):
         stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
 
         # Gemini 3.1 Flash TTS (Preview) — streaming-capable, supports Aoede + 29
-        # other voices. Note: gemini-3.1-flash-tts-preview isn't in Pipecat's
-        # documented model list for GeminiTTSService (which only names
-        # gemini-2.5-flash-tts / gemini-2.5-pro-tts) — `model` is a passthrough
-        # string though, so this should work; worth a smoke test against your key.
-        #
-        # use_genai=True is required: without it, GeminiTTSService defaults to
-        # the Google Cloud TTS backend, which looks for full GCP service-account
-        # credentials (GOOGLE_APPLICATION_CREDENTIALS) and ignores api_key
-        # entirely — causing "No valid credentials provided." even with a
-        # correct API key set. use_genai=True forces the lightweight
-        # google-genai client, which is what actually accepts api_key auth.
+        # other voices. Passing api_key alone selects the GenAI (google-genai)
+        # backend automatically — confirmed against source: pipecat just does
+        # genai.Client(api_key=api_key) when api_key is provided. No extra
+        # flag needed (a prior version of this file incorrectly added
+        # use_genai=True, which isn't a real parameter on this class).
         tts = GeminiTTSService(
             api_key=GOOGLE_API_KEY,
-            use_genai=True,
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
