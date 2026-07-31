@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 
 const { handleIncomingWhatsAppMessage } = require('./WhatsApp');
 const { handleIncomingInstagramMessage } = require('./Instagram');
+const { handleIncomingCall, handleVoiceProcess, handleVoiceEnd } = require('./voice/Voice');
 
 const app = express();
 app.use(bodyParser.json());
@@ -46,25 +47,14 @@ app.get('/auth/instagram/callback', (req, res) => {
 // Twilio hits this once when a call comes in. It doesn't handle the
 // conversation itself, it just tells Twilio where to stream the raw
 // call audio, our Pipecat service, which does the actual STT/LLM/TTS loop.
-app.post('/voice/incoming', (req, res) => {
-  console.log('Incoming call from:', req.body.From);
-
-  const pipecatUrl = process.env.PIPECAT_WEBSOCKET_URL;
-
-  if (!pipecatUrl) {
-    console.error('PIPECAT_WEBSOCKET_URL not set — cannot connect the call');
+app.post('/voice/incoming', async (req, res) => {
+  try {
+    await handleIncomingCall(req, res);
+  } catch (err) {
+    console.error('Error in /voice/incoming:', err);
     res.type('text/xml');
-    return res.send(`<Response><Say>Sorry, we are unable to take your call right now.</Say></Response>`);
+    res.send('<Response><Say>Sorry, we are unable to take your call right now.</Say></Response>');
   }
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Connect>
-        <Stream url="${pipecatUrl}" />
-      </Connect>
-    </Response>
-  `);
 });
 
 app.post('/voice/process', async (req, res) => {
