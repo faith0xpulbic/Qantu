@@ -158,6 +158,9 @@ class NodeJSBridge(FrameProcessor):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    import json
+    import traceback
+
     print("[ws] Handler entered, accepting connection...", flush=True)
     await websocket.accept()
     print("[ws] Connection accepted, waiting for first message...", flush=True)
@@ -167,23 +170,26 @@ async def websocket_endpoint(websocket: WebSocket):
     # Docs: https://www.twilio.com/docs/voice/media-streams/websocket-messages
     start_msg = None
     try:
-        for _ in range(5):  # small bound so a malformed stream can't hang forever
-            msg = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        for i in range(5):  # small bound so a malformed stream can't hang forever
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+            print(f"[ws] Raw message #{i}: {raw[:500]}", flush=True)
+            msg = json.loads(raw)
             event = msg.get("event")
             if event == "connected":
-                print("[ws] Received 'connected' handshake event, waiting for 'start'...")
+                print("[ws] Received 'connected' handshake event, waiting for 'start'...", flush=True)
                 continue
             if event == "start":
                 start_msg = msg
                 break
-            print(f"[ws] Unexpected event before 'start': {event}")
+            print(f"[ws] Unexpected event before 'start': {event}", flush=True)
     except Exception as e:
-        print(f"[ws] Failed to receive/parse start event: {e}")
+        print(f"[ws] Failed to receive/parse start event: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
         await websocket.close()
         return
 
     if start_msg is None:
-        print("[ws] Never received a 'start' event")
+        print("[ws] Never received a 'start' event", flush=True)
         await websocket.close()
         return
 
@@ -193,11 +199,13 @@ async def websocket_endpoint(websocket: WebSocket):
         from_number = start_msg["start"]["from"]
         to_number = start_msg["start"]["to"]
     except KeyError as e:
-        print(f"[ws] start event missing expected field: {e}. Payload: {start_msg}")
+        print(f"[ws] start event missing expected field: {e}. Payload: {start_msg}", flush=True)
         await websocket.close()
         return
 
-    print(f"[ws] Call started — call_sid={call_sid} from={from_number} to={to_number}")
+    print(f"[ws] Call started — call_sid={call_sid} from={from_number} to={to_number}", flush=True)
+
+
 
     # ── Pipecat pipeline setup ──────────────────────────────────────
     try:
@@ -248,7 +256,7 @@ async def websocket_endpoint(websocket: WebSocket):
         task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
         runner = PipelineRunner()
     except Exception as e:
-        print(f"[ws] Failed to construct pipeline for call_sid={call_sid}: {e}")
+        print(f"[ws] Failed to construct pipeline for call_sid={call_sid}: {e}", flush=True)
         await websocket.close()
         return
 
@@ -256,6 +264,6 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await runner.run(task)
     except Exception as e:
-        print(f"[ws] Pipeline run failed for call_sid={call_sid}: {e}")
+        print(f"[ws] Pipeline run failed for call_sid={call_sid}: {e}", flush=True)
     finally:
         await bridge.call_end()
