@@ -13,8 +13,8 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.google import GeminiTTSService
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.google.tts import GeminiTTSService
 
 # ── Config ───────────────────────────────────────────────────────
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
