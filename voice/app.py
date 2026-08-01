@@ -13,7 +13,7 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
 from pipecat.services.google.tts import GeminiTTSService
 from pipecat.services.tts_service import TextAggregationMode
 
@@ -418,8 +418,24 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close()
         return
 
+    # DEFAULT endpointing is only 10ms of silence (confirmed via Deepgram
+    # docs) — any brief pause mid-sentence gets treated as end-of-turn,
+    # fragmenting a single utterance into multiple separate TranscriptionFrames.
+    # Raising endpointing + adding utterance_end_ms (requires interim_results)
+    # gives Deepgram a real gap to wait for before finalizing, so "Eight...
+    # [pause]...sure I can message you on WhatsApp" doesn't get split into
+    # two separate bot turns.
     try:
-        stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
+        stt = DeepgramSTTService(
+            api_key=DEEPGRAM_API_KEY,
+            settings=DeepgramSTTSettings(
+                interim_results=True,       # required for utterance_end_ms
+                endpointing=500,             # ms of silence before finalizing
+                                              # (was defaulting to 10ms)
+                utterance_end_ms=1000,       # secondary, transcript-based
+                                              # end-of-utterance signal
+            ),
+        )
     except Exception as e:
         print(f"[ws] DEEPGRAM STT construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
         traceback.print_exc()
