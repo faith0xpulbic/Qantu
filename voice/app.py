@@ -6,7 +6,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame
+from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame, BotInterruptionFrame
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -15,6 +15,7 @@ from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.tts import GeminiTTSService
+from pipecat.services.tts_service import TextAggregationMode
 
 # ── Config ───────────────────────────────────────────────────────
 NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
@@ -192,6 +193,11 @@ class NodeJSBridge(FrameProcessor):
         self.transcript = []          # Pipecat's in-memory call log
         self.meta = {}                # call_sid, from, to, conversation_id, etc.
         self.silence_task = None      # asyncio task for the 3s greeting timer
+        self.generation = 0           # bumped on every new user turn — stale
+                                        # in-flight replies check this before
+                                        # being spoken, so a slow Node.js call
+                                        # from an old turn can't talk over a
+                                        # newer one
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -203,6 +209,20 @@ class NodeJSBridge(FrameProcessor):
 
         elif isinstance(frame, TranscriptionFrame):
             print(f"[bridge] TranscriptionFrame received: {frame.text!r}", flush=True)
+
+            # New turn starts NOW — anything from an older turn still in
+            # flight (an earlier _call_nodejs call that hasn't returned yet)
+            # is now stale and will be dropped when it lands, see below.
+            self.generation += 1
+            my_generation = self.generation
+
+            # KILL SWITCH: the user is talking — immediately cancel any bot
+            # speech/TTS currently in flight or queued, before we even start
+            # the Node.js round-trip. Without this, old replies keep playing
+            # and queuing up behind each other while the user is ignored.
+            await self.broadcast_frame(BotInterruptionFrame)
+            print("[bridge] Broadcast BotInterruptionFrame — killing any in-flight bot speech", flush=True)
+
             # Cancel silence timer — caller spoke before timeout
             if self.silence_task:
                 self.silence_task.cancel()
@@ -222,6 +242,16 @@ class NodeJSBridge(FrameProcessor):
             reply = await self._call_nodejs(text)
             print(f"[bridge] Node.js reply for user text: {reply!r}", flush=True)
 
+            # STALE CHECK: if the user spoke again while we were waiting on
+            # Node.js, self.generation has moved past my_generation. This
+            # reply is for a turn that's no longer current — drop it instead
+            # of pushing it to TTS, where it would talk over/after the newer
+            # turn and cause exactly the "sluggish, answers an old question"
+            # symptom.
+            if my_generation != self.generation:
+                print(f"[bridge] DROPPING stale reply (generation {my_generation}, now at {self.generation}): {reply!r}", flush=True)
+                return
+
             if reply:
                 self.transcript.append({"role": "assistant", "content": reply})
                 await self.push_frame(TextFrame(reply), direction)
@@ -234,12 +264,18 @@ class NodeJSBridge(FrameProcessor):
 
     # ── Silence timer: if caller says nothing for 3s, trigger greeting ──
     async def _silence_timer(self):
+        my_generation = self.generation
         try:
             print("[bridge] Silence timer running — waiting 3s before greeting", flush=True)
             await asyncio.sleep(3.0)
             print("[bridge] Silence timer elapsed — calling Node.js for greeting", flush=True)
             reply = await self._call_nodejs("")
             print(f"[bridge] Node.js greeting reply: {reply!r}", flush=True)
+
+            if my_generation != self.generation:
+                print(f"[bridge] DROPPING stale greeting (generation {my_generation}, now at {self.generation}): {reply!r}", flush=True)
+                return
+
             if reply:
                 self.transcript.append({"role": "assistant", "content": reply})
                 await self.push_frame(TextFrame(reply))
@@ -394,11 +430,20 @@ async def websocket_endpoint(websocket: WebSocket):
     # GeminiTTSService has NO api_key parameter — it requires a real GCP
     # service account via credentials_path (or credentials as a JSON string).
     # GOOGLE_CREDENTIALS_PATH points at a Render Secret File mount.
+    #
+    # text_aggregation_mode=TOKEN (confirmed real param on the TTSService base
+    # class, flows through **kwargs): by default TTSService buffers text with
+    # SimpleTextAggregator until a sentence boundary, firing one run_tts()
+    # network call PER SENTENCE — each with its own latency, which is why a
+    # 3-sentence reply played as "sentence... 1.4s pause... sentence...".
+    # TOKEN mode streams text through without sentence-splitting, so our
+    # single NodeJSBridge reply becomes one run_tts() call instead of several.
     try:
         tts = GeminiTTSService(
             credentials_path=GOOGLE_CREDENTIALS_PATH,
             location="us-central1",  # error showed locations/global — Vertex AI preview
                                        # models often require a specific region instead
+            text_aggregation_mode=TextAggregationMode.TOKEN,
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
