@@ -38,7 +38,7 @@ async function getBusinessByTwilioNumber(twilioNumber) {
   const { data, error } = await supabase
     .from('businesses')
     .select('*')
-    .eq('twilio_phone_number', twilioNumber)
+    .eq('call_number', twilioNumber)
     .single();
 
   if (error) {
