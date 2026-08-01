@@ -6,7 +6,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame, BotInterruptionFrame
+from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -220,8 +220,8 @@ class NodeJSBridge(FrameProcessor):
             # speech/TTS currently in flight or queued, before we even start
             # the Node.js round-trip. Without this, old replies keep playing
             # and queuing up behind each other while the user is ignored.
-            await self.broadcast_frame(BotInterruptionFrame)
-            print("[bridge] Broadcast BotInterruptionFrame — killing any in-flight bot speech", flush=True)
+            await self.push_interruption_task_frame_and_wait()
+            print("[bridge] Interruption pushed and acknowledged — killing any in-flight bot speech", flush=True)
 
             # Cancel silence timer — caller spoke before timeout
             if self.silence_task:
