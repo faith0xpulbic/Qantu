@@ -120,6 +120,7 @@ async function resolveCallContext({ callSid, fromNumber, toNumber, conversationI
 // ============================================
 
 async function handleVoiceProcess(req, res) {
+  const requestReceivedAt = Date.now();
   const {
     callSid,
     from: fromNumber,
@@ -154,6 +155,9 @@ async function handleVoiceProcess(req, res) {
   // Every later turn hits the cache instead of the database at all.
   let ctx = callContextCache.get(callSid);
   if (!ctx) {
+    const fetchStart = Date.now();
+    console.log(`[cache] MISS for callSid=${callSid} — fetching context from DB`);
+
     // resolveCallContext only returns a `business` object on a fresh
     // resolution (first turn) — on cached-ID turns it's null, but we won't
     // reach here on a cached turn anyway since ctx would already be set.
@@ -169,6 +173,9 @@ async function handleVoiceProcess(req, res) {
 
     ctx = { businessSettings, businessKnowledge, notes, currentTag, isOwnerCalling, cachedAt: Date.now() };
     callContextCache.set(callSid, ctx);
+    console.log(`[cache] Fetch + cache took ${Date.now() - fetchStart}ms for callSid=${callSid}`);
+  } else {
+    console.log(`[cache] HIT for callSid=${callSid} — skipping DB entirely (cached ${Date.now() - ctx.cachedAt}ms ago)`);
   }
 
   const { businessSettings, businessKnowledge, notes, currentTag } = ctx;
@@ -186,6 +193,9 @@ async function handleVoiceProcess(req, res) {
     currentTag,
     channelType: 'call',
   };
+
+  const preGeminiMs = Date.now() - requestReceivedAt;
+  console.log(`[timing] callSid=${callSid} — Node.js overhead before Gemini call: ${preGeminiMs}ms`);
 
   const result = await processMessage(context, text || '');
 
