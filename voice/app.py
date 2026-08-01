@@ -463,7 +463,7 @@ async def websocket_endpoint(websocket: WebSocket):
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
-                prompt="Speak naturally in a calm, professional tone at standard speaking pace."
+                prompt="Speak with a warm Nigerian English accent. Keep the tone calm, measured, and professional — friendly but not overly enthusiastic or high-energy. Speak at a natural, unhurried pace, like a knowledgeable colleague having a relaxed conversation, not a salesperson."
             )
         )
     except Exception as e:
