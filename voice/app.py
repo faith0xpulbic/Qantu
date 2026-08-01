@@ -358,6 +358,10 @@ async def websocket_endpoint(websocket: WebSocket):
         transport = FastAPIWebsocketTransport(
             websocket=websocket,
             params=FastAPIWebsocketParams(
+                audio_in_enabled=True,   # CRITICAL — defaults to False. Without
+                                          # this, caller audio never reaches the
+                                          # pipeline at all (TTS output still
+                                          # works fine since that's audio_out).
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_enabled=True,
