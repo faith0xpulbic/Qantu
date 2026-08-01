@@ -376,7 +376,7 @@ async def websocket_endpoint(websocket: WebSocket):
             transport.output(),
         ])
 
-        task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
+        task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
         runner = PipelineRunner()
     except Exception as e:
         print(f"[ws] PIPELINE ASSEMBLY failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
