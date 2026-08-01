@@ -463,8 +463,7 @@ async def websocket_endpoint(websocket: WebSocket):
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
-                prompt="Speak with a warm Nigerian English accent. Keep the tone calm, measured, and professional — friendly but not overly enthusiastic or high-energy. Speak at a natural, unhurried pace, like a knowledgeable colleague having a relaxed conversation, not a salesperson."
-            )
+                prompt="Speak in a modern, urban Nigerian English accent with the voice of a young adult in her early 20s. Keep the tone warm, clear, and effortlessly smooth — like a smart, friendly peer sharing quick insights. Speak at a natural, fluid pace with conversational rhythm, avoiding stiff or overly formal cadence"            )
         )
     except Exception as e:
         print(f"[ws] GEMINI TTS construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
