@@ -15,7 +15,7 @@ const {
   updateCustomerName,
 } = require('../Database');
 const { processMessage } = require('../Bot');
-const { pingOwner } = require('../WhatsApp');
+const { pingOwner, normalizePhone } = require('../WhatsApp');
 
 // ============================================
 // /voice/incoming
@@ -129,8 +129,16 @@ async function handleVoiceProcess(req, res) {
 
   const businessSettings = await getBusinessSettings(businessId);
   const businessKnowledge = await getBusinessKnowledge(businessId);
-  const notes = await getNotes(conversationId);
-  const currentTag = await getTag(conversationId);
+
+  // If the caller is this business's own owner (same check WhatsApp.js uses
+  // for owner replies), skip notes/tag — that's accumulated history from
+  // past customer conversations, and the owner should get a fresh start,
+  // not be treated as a returning customer with baggage from prior calls.
+  const business = await getBusinessByTwilioNumber(toNumber);
+  const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(business?.owner_contact);
+
+  const notes = isOwnerCalling ? [] : await getNotes(conversationId);
+  const currentTag = isOwnerCalling ? null : await getTag(conversationId);
 
   const recentMessages = (transcript || []).map(t => ({
     role: t.role === 'customer' ? 'customer' : 'assistant',
