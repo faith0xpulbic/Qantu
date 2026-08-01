@@ -134,23 +134,32 @@ async function processMessage(context, text, mediaUrl = null) {
     ? (text ? `[Customer sent an image with caption: "${text}"]` : `[Customer sent an image — no caption]`)
     : text;
 
+  const requestPayload = {
+    systemInstruction: {
+      parts: [{ text: systemPrompt }],
+    },
+    contents: [
+      ...history,
+      { role: 'user', parts: [{ text: userContent }] },
+    ],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: RESPONSE_SCHEMA,
+      temperature: 0.7,
+    },
+  };
+
+  // Rough payload size in characters — correlate with slow turns to see if
+  // it's growing history/knowledge, not just raw Gemini processing time.
+  const payloadSize = JSON.stringify(requestPayload).length;
+
   try {
+    const geminiStart = Date.now();
+    console.log(`[gemini] Sending request — model=${MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
+
     const response = await axios.post(
       `${GEMINI_URL}/${MODEL}:generateContent`,
-      {
-        systemInstruction: {
-          parts: [{ text: systemPrompt }],
-        },
-        contents: [
-          ...history,
-          { role: 'user', parts: [{ text: userContent }] },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
-          temperature: 0.7,
-        },
-      },
+      requestPayload,
       {
         headers: {
           'x-goog-api-key': process.env.GEMINI_API_KEY,
@@ -158,6 +167,9 @@ async function processMessage(context, text, mediaUrl = null) {
         },
       }
     );
+
+    const geminiMs = Date.now() - geminiStart;
+    console.log(`[gemini] Response received — ${geminiMs}ms, model=${MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
 
     const rawText = response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
 
