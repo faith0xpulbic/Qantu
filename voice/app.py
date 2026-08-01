@@ -6,7 +6,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame
+from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -145,6 +145,30 @@ async def voice_webhook(request: Request):
     return Response(content=twiml, media_type="application/xml")
 
 
+class DebugTap(FrameProcessor):
+    """Logs every frame passing through — specifically catches ErrorFrame
+    (which GeminiTTSService yields on failure instead of raising, so our
+    try/except around construction never sees it) and counts audio frames
+    to confirm whether TTS is actually producing output."""
+
+    def __init__(self, label: str):
+        super().__init__()
+        self.label = label
+        self.audio_frame_count = 0
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, ErrorFrame):
+            print(f"[{self.label}] ErrorFrame: {frame.error}", flush=True)
+        elif isinstance(frame, TTSAudioRawFrame):
+            self.audio_frame_count += 1
+            if self.audio_frame_count == 1:
+                print(f"[{self.label}] First TTSAudioRawFrame received — audio IS being generated", flush=True)
+        elif isinstance(frame, TextFrame):
+            print(f"[{self.label}] TextFrame: {frame.text!r}", flush=True)
+        await self.push_frame(frame, direction)
+
+
 class NodeJSBridge(FrameProcessor):
     """
     Catches STT transcriptions, maintains the full in-memory transcript,
@@ -209,8 +233,11 @@ class NodeJSBridge(FrameProcessor):
             if reply:
                 self.transcript.append({"role": "assistant", "content": reply})
                 await self.push_frame(TextFrame(reply))
+                print("[bridge] Pushed greeting TextFrame downstream to TTS", flush=True)
+            else:
+                print("[bridge] No greeting reply from Node.js — nothing pushed to TTS", flush=True)
         except asyncio.CancelledError:
-            pass
+            print("[bridge] Silence timer cancelled (caller spoke first)", flush=True)
 
     # ── POST to Node.js /voice/process ────────────────────────────────
     async def _call_nodejs(self, text: str):
@@ -376,11 +403,14 @@ async def websocket_endpoint(websocket: WebSocket):
             "to": to_number,
         }
 
+        debug_tap = DebugTap("tts-out")
+
         pipeline = Pipeline([
             transport.input(),
             stt,
             bridge,
             tts,
+            debug_tap,
             transport.output(),
         ])
 
