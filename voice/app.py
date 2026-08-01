@@ -23,12 +23,43 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")  # a
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")  # from Twilio Console dashboard
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")    # from Twilio Console dashboard
 
+# GeminiTTSService (Google Cloud TTS backend) has NO api_key support — it
+# requires a real GCP service account. Render "Secret Files" mounts uploaded
+# files at /etc/secrets/<filename>. Override with GOOGLE_CREDENTIALS_PATH
+# env var if you name the secret file something else.
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "/etc/secrets/google-credentials.json")
+
 for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY / GEMINI_API_KEY", GOOGLE_API_KEY), ("TWILIO_ACCOUNT_SID", TWILIO_ACCOUNT_SID), ("TWILIO_AUTH_TOKEN", TWILIO_AUTH_TOKEN)]:
     if not _val:
         print(f"[startup] WARNING: env var {_name} is not set")
 
+if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
+    print(f"[startup] WARNING: GCP service account file not found at {GOOGLE_CREDENTIALS_PATH}")
+
 app = FastAPI()
 print("[startup] app.py version: connected-event-fix-v2")
+
+
+@app.on_event("startup")
+async def verify_google_credentials_file():
+    """Sanity-check the GCP service account file GeminiTTSService will
+    actually use — confirms it exists, parses as JSON, and has the fields
+    a service account key needs, before any call tries to use it."""
+    if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
+        print(f"[startup] GCP credentials file MISSING at {GOOGLE_CREDENTIALS_PATH}", flush=True)
+        return
+    try:
+        import json as _json
+        with open(GOOGLE_CREDENTIALS_PATH) as f:
+            data = _json.load(f)
+        required = ["type", "project_id", "private_key", "client_email"]
+        missing = [k for k in required if k not in data]
+        if missing:
+            print(f"[startup] GCP credentials file parsed but missing fields: {missing}", flush=True)
+        else:
+            print(f"[startup] GCP credentials file OK — project_id={data.get('project_id')}, client_email={data.get('client_email')}", flush=True)
+    except Exception as e:
+        print(f"[startup] GCP credentials file failed to parse: {e}", flush=True)
 
 
 @app.on_event("startup")
@@ -59,21 +90,26 @@ async def verify_google_key():
 
 @app.on_event("startup")
 async def verify_deepgram_key():
-    """Same idea as verify_google_key: hit Deepgram's own auth check endpoint
-    directly, independent of the Deepgram SDK/Pipecat, to know definitively
-    whether DEEPGRAM_API_KEY is valid before a live call."""
+    """Hit Deepgram's actual transcription endpoint with a tiny public sample
+    URL — this only needs the same usage:write permission a real STT
+    connection needs, unlike /v1/auth/grant which requires Member+ scope
+    and can 403 even on a perfectly usable transcription key."""
     if not DEEPGRAM_API_KEY:
         return
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.deepgram.com/v1/auth/grant",
-                headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-                timeout=aiohttp.ClientTimeout(total=10),
+                "https://api.deepgram.com/v1/listen",
+                headers={
+                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"url": "https://dpgr.am/spacewalk.wav"},
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 body = await resp.text()
                 if resp.status == 200:
-                    print(f"[startup] DEEPGRAM_API_KEY is VALID. Grant response: {body[:200]}", flush=True)
+                    print(f"[startup] DEEPGRAM_API_KEY is VALID (transcription succeeded).", flush=True)
                 else:
                     print(f"[startup] DEEPGRAM_API_KEY check FAILED — HTTP {resp.status}: {body[:300]}", flush=True)
     except Exception as e:
@@ -306,15 +342,12 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     # CONFIRMED against live pipecat-ai 1.4.0 source (services/google/tts.py):
-    # GeminiTTSService.__init__ has NO api_key parameter at all — it only
-    # accepts credentials / credentials_path / GCP Application Default
-    # Credentials. Any api_key= we pass here is silently swallowed by
-    # **kwargs and does nothing. This WILL fail with "No valid credentials
-    # provided." until we either supply a GCP service account, or replace
-    # this with a custom TTS class using the real google-genai SDK directly.
+    # GeminiTTSService has NO api_key parameter — it requires a real GCP
+    # service account via credentials_path (or credentials as a JSON string).
+    # GOOGLE_CREDENTIALS_PATH points at a Render Secret File mount.
     try:
         tts = GeminiTTSService(
-            api_key=GOOGLE_API_KEY,
+            credentials_path=GOOGLE_CREDENTIALS_PATH,
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
