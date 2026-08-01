@@ -289,4 +289,4 @@ async function handleIncomingWhatsAppMessage(body) {
   }
 }
 
-module.exports = { sendWhatsAppMessage, pingOwner, handleIncomingWhatsAppMessage, registerInstagramRelay };
+module.exports = { sendWhatsAppMessage, pingOwner, handleIncomingWhatsAppMessage, registerInstagramRelay, normalizePhone };
