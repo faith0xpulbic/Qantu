@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import aiohttp
@@ -416,7 +417,14 @@ async def websocket_endpoint(websocket: WebSocket):
             transport.output(),
         ])
 
-        task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(
+                allow_interruptions=True,
+                audio_in_sample_rate=8000,
+                audio_out_sample_rate=8000,
+            ),
+        )
         runner = PipelineRunner()
     except Exception as e:
         print(f"[ws] PIPELINE ASSEMBLY failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
