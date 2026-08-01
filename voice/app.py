@@ -57,6 +57,29 @@ async def verify_google_key():
         print(f"[startup] GOOGLE_API_KEY check errored: {e}", flush=True)
 
 
+@app.on_event("startup")
+async def verify_deepgram_key():
+    """Same idea as verify_google_key: hit Deepgram's own auth check endpoint
+    directly, independent of the Deepgram SDK/Pipecat, to know definitively
+    whether DEEPGRAM_API_KEY is valid before a live call."""
+    if not DEEPGRAM_API_KEY:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.deepgram.com/v1/auth/grant",
+                headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                body = await resp.text()
+                if resp.status == 200:
+                    print(f"[startup] DEEPGRAM_API_KEY is VALID. Grant response: {body[:200]}", flush=True)
+                else:
+                    print(f"[startup] DEEPGRAM_API_KEY check FAILED — HTTP {resp.status}: {body[:300]}", flush=True)
+    except Exception as e:
+        print(f"[startup] DEEPGRAM_API_KEY check errored: {e}", flush=True)
+
+
 @app.post("/voice")
 async def voice_webhook(request: Request):
     """
@@ -268,15 +291,28 @@ async def websocket_endpoint(websocket: WebSocket):
                 ),
             ),
         )
+    except Exception as e:
+        print(f"[ws] TRANSPORT construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        await websocket.close()
+        return
 
+    try:
         stt = DeepgramSTTService(api_key=DEEPGRAM_API_KEY)
+    except Exception as e:
+        print(f"[ws] DEEPGRAM STT construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        await websocket.close()
+        return
 
-        # Gemini 3.1 Flash TTS (Preview) — streaming-capable, supports Aoede + 29
-        # other voices. Passing api_key alone selects the GenAI (google-genai)
-        # backend automatically — confirmed against source: pipecat just does
-        # genai.Client(api_key=api_key) when api_key is provided. No extra
-        # flag needed (a prior version of this file incorrectly added
-        # use_genai=True, which isn't a real parameter on this class).
+    # CONFIRMED against live pipecat-ai 1.4.0 source (services/google/tts.py):
+    # GeminiTTSService.__init__ has NO api_key parameter at all — it only
+    # accepts credentials / credentials_path / GCP Application Default
+    # Credentials. Any api_key= we pass here is silently swallowed by
+    # **kwargs and does nothing. This WILL fail with "No valid credentials
+    # provided." until we either supply a GCP service account, or replace
+    # this with a custom TTS class using the real google-genai SDK directly.
+    try:
         tts = GeminiTTSService(
             api_key=GOOGLE_API_KEY,
             settings=GeminiTTSService.Settings(
@@ -285,7 +321,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 prompt="Speak naturally in a calm, professional tone at standard speaking pace."
             )
         )
+    except Exception as e:
+        print(f"[ws] GEMINI TTS construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        await websocket.close()
+        return
 
+    try:
         bridge = NodeJSBridge(api_url=NODEJS_API_URL)
         bridge.meta = {
             "call_sid": call_sid,
@@ -304,7 +346,8 @@ async def websocket_endpoint(websocket: WebSocket):
         task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
         runner = PipelineRunner()
     except Exception as e:
-        print(f"[ws] Failed to construct pipeline for call_sid={call_sid}: {e}", flush=True)
+        print(f"[ws] PIPELINE ASSEMBLY failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
         await websocket.close()
         return
 
