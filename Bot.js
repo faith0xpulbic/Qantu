@@ -16,6 +16,16 @@ function cleanReply(text) {
 }
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+// In-call voice turns: mostly "read business context, respond in fixed JSON
+// schema" — low reasoning complexity, high volume, latency-sensitive.
+// gemini-3.5-flash-lite is Google's documented model for exactly this:
+// "high-volume, cost-sensitive model optimized for low-latency high
+// throughput subagent tasks" (confirmed via Google's own model docs).
+const CALL_MODEL = 'gemini-3.5-flash-lite';
+
+// Owner-facing conversations (tool calling, multi-step lookups, deciding
+// what's worth surfacing to a human) and end-of-call summaries need
+// stronger reasoning — kept on gemini-3.6-flash.
 const MODEL = 'gemini-3.6-flash';
 
 // Exact schema Gemini is constrained to follow — this is stronger than
@@ -145,7 +155,15 @@ async function processMessage(context, text, mediaUrl = null) {
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
-      temperature: 0.7,
+      // NOTE: temperature/top_p/top_k are deprecated on newer Gemini model
+      // generations per Google's own docs — the API ignores them now and
+      // will error on future generations, so they're intentionally left
+      // out here rather than carried over from the old gemini-3.6-flash config.
+      thinkingConfig: { thinkingLevel: 'minimal' },  // Google's documented
+                                                       // guidance for high-
+                                                       // throughput routing/
+                                                       // classification-style
+                                                       // tasks like this one
     },
   };
 
@@ -155,10 +173,10 @@ async function processMessage(context, text, mediaUrl = null) {
 
   try {
     const geminiStart = Date.now();
-    console.log(`[gemini] Sending request — model=${MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
+    console.log(`[gemini] Sending request — model=${CALL_MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
 
     const response = await axios.post(
-      `${GEMINI_URL}/${MODEL}:generateContent`,
+      `${GEMINI_URL}/${CALL_MODEL}:generateContent`,
       requestPayload,
       {
         headers: {
@@ -169,7 +187,7 @@ async function processMessage(context, text, mediaUrl = null) {
     );
 
     const geminiMs = Date.now() - geminiStart;
-    console.log(`[gemini] Response received — ${geminiMs}ms, model=${MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
+    console.log(`[gemini] Response received — ${geminiMs}ms, model=${CALL_MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
 
     const rawText = response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
 
