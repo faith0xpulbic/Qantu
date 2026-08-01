@@ -6,7 +6,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame
+from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -149,12 +149,16 @@ class DebugTap(FrameProcessor):
     """Logs every frame passing through — specifically catches ErrorFrame
     (which GeminiTTSService yields on failure instead of raising, so our
     try/except around construction never sees it) and counts audio frames
-    to confirm whether TTS is actually producing output."""
+    to confirm whether TTS is actually producing output. Also used on the
+    INPUT side to confirm raw caller audio is actually reaching the
+    pipeline before Deepgram, since Deepgram's socket can be healthy
+    while never actually receiving audio."""
 
     def __init__(self, label: str):
         super().__init__()
         self.label = label
         self.audio_frame_count = 0
+        self.input_audio_count = 0
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -164,6 +168,12 @@ class DebugTap(FrameProcessor):
             self.audio_frame_count += 1
             if self.audio_frame_count == 1:
                 print(f"[{self.label}] First TTSAudioRawFrame received — audio IS being generated", flush=True)
+        elif isinstance(frame, InputAudioRawFrame):
+            self.input_audio_count += 1
+            if self.input_audio_count == 1:
+                print(f"[{self.label}] First InputAudioRawFrame received — caller audio IS reaching the pipeline", flush=True)
+            if self.input_audio_count % 50 == 0:
+                print(f"[{self.label}] {self.input_audio_count} input audio frames received so far", flush=True)
         elif isinstance(frame, TextFrame):
             print(f"[{self.label}] TextFrame: {frame.text!r}", flush=True)
         await self.push_frame(frame, direction)
@@ -406,9 +416,11 @@ async def websocket_endpoint(websocket: WebSocket):
         }
 
         debug_tap = DebugTap("tts-out")
+        input_debug_tap = DebugTap("audio-in")
 
         pipeline = Pipeline([
             transport.input(),
+            input_debug_tap,
             stt,
             bridge,
             tts,
