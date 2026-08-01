@@ -1,513 +1,321 @@
-import os
-import asyncio
-import aiohttp
-from fastapi import FastAPI, WebSocket, Request, Response
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask, PipelineParams
-from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.frames.frames import TextFrame, TranscriptionFrame, StartFrame, ErrorFrame, TTSAudioRawFrame, InputAudioRawFrame
-from pipecat.transports.websocket.fastapi import (
-    FastAPIWebsocketTransport,
-    FastAPIWebsocketParams,
-)
-from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
-from pipecat.services.google.tts import GeminiTTSService
-from pipecat.services.tts_service import TextAggregationMode
+const {
+  getBusinessByTwilioNumber,
+  findOrCreateCustomer,
+  getOrCreateActiveConversation,
+  updateConversationStatus,
+  createCall,
+  getCallBySid,
+  completeCall,
+  saveNote,
+  getNotes,
+  getBusinessSettings,
+  getBusinessKnowledge,
+  getTag,
+  setTag,
+  updateCustomerName,
+} = require('../Database');
+const { processMessage } = require('../Bot');
+const { pingOwner, normalizePhone } = require('../WhatsApp');
 
-# ── Config ───────────────────────────────────────────────────────
-NODEJS_API_URL = os.getenv("NODEJS_API_URL")        # e.g. https://qantu-api.onrender.com
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")  # accept either name
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")  # from Twilio Console dashboard
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")    # from Twilio Console dashboard
+// ============================================
+// PER-CALL CONTEXT CACHE
+// businessSettings/businessKnowledge/notes/currentTag/isOwnerCalling don't
+// change mid-call — fetch once on the first /voice/process turn, then reuse
+// for every later turn in the same call instead of re-hitting the DB.
+// Keyed by callSid, cleared in handleVoiceEnd so it can't leak across calls.
+// ============================================
+const callContextCache = new Map();
 
-# GeminiTTSService (Google Cloud TTS backend) has NO api_key support — it
-# requires a real GCP service account. Render "Secret Files" mounts uploaded
-# files at /etc/secrets/<filename>. Override with GOOGLE_CREDENTIALS_PATH
-# env var if you name the secret file something else.
-GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "/etc/secrets/google-credentials.json")
+// Safety net: if /voice/end never fires for a call (crash, dropped
+// connection), its cache entry would otherwise sit forever. Sweep out
+// anything older than 30 minutes — no real call runs that long.
+const CALL_CONTEXT_MAX_AGE_MS = 30 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - CALL_CONTEXT_MAX_AGE_MS;
+  for (const [callSid, entry] of callContextCache) {
+    if (entry.cachedAt < cutoff) callContextCache.delete(callSid);
+  }
+}, 5 * 60 * 1000);
 
-for _name, _val in [("NODEJS_API_URL", NODEJS_API_URL), ("DEEPGRAM_API_KEY", DEEPGRAM_API_KEY), ("GOOGLE_API_KEY / GEMINI_API_KEY", GOOGLE_API_KEY), ("TWILIO_ACCOUNT_SID", TWILIO_ACCOUNT_SID), ("TWILIO_AUTH_TOKEN", TWILIO_AUTH_TOKEN)]:
-    if not _val:
-        print(f"[startup] WARNING: env var {_name} is not set")
+// ============================================
+// /voice/incoming
+// Twilio hits this the moment a call connects. We don't create the
+// customer/conversation/call records here, app.py's bridge only has
+// call_sid/from/to at connect time, so resolution happens lazily on the
+// FIRST /voice/process call instead. This endpoint's only job is telling
+// Twilio where to stream the audio.
+// ============================================
 
-if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
-    print(f"[startup] WARNING: GCP service account file not found at {GOOGLE_CREDENTIALS_PATH}")
+async function handleIncomingCall(req, res) {
+  const fromNumber = req.body.From;
+  const toNumber = req.body.To;
+  const callSid = req.body.CallSid;
 
-app = FastAPI()
-print("[startup] app.py version: connected-event-fix-v2")
+  console.log(`Incoming call — from: ${fromNumber}, to: ${toNumber}, sid: ${callSid}`);
 
+  const pipecatUrl = process.env.PIPECAT_WEBSOCKET_URL;
 
-@app.on_event("startup")
-async def verify_google_credentials_file():
-    """Sanity-check the GCP service account file GeminiTTSService will
-    actually use — confirms it exists, parses as JSON, and has the fields
-    a service account key needs, before any call tries to use it."""
-    if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
-        print(f"[startup] GCP credentials file MISSING at {GOOGLE_CREDENTIALS_PATH}", flush=True)
-        return
-    try:
-        import json as _json
-        with open(GOOGLE_CREDENTIALS_PATH) as f:
-            data = _json.load(f)
-        required = ["type", "project_id", "private_key", "client_email"]
-        missing = [k for k in required if k not in data]
-        if missing:
-            print(f"[startup] GCP credentials file parsed but missing fields: {missing}", flush=True)
-        else:
-            print(f"[startup] GCP credentials file OK — project_id={data.get('project_id')}, client_email={data.get('client_email')}", flush=True)
-    except Exception as e:
-        print(f"[startup] GCP credentials file failed to parse: {e}", flush=True)
+  if (!pipecatUrl) {
+    console.error('PIPECAT_WEBSOCKET_URL not set — cannot connect the call');
+    res.type('text/xml');
+    return res.send('<Response><Say>Sorry, we are unable to take your call right now.</Say></Response>');
+  }
 
+  res.type('text/xml');
+  res.send(`
+    <Response>
+      <Connect>
+        <Stream url="${pipecatUrl}" />
+      </Connect>
+    </Response>
+  `);
+}
 
-@app.on_event("startup")
-async def verify_google_key():
-    """Quick standalone check: is GOOGLE_API_KEY actually valid against
-    Google's API? Runs independent of Pipecat/pipeline construction so we
-    can tell 'bad key' apart from 'bad model name' without a live call."""
-    if not GOOGLE_API_KEY:
-        return
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://generativelanguage.googleapis.com/v1beta/models",
-                params={"key": GOOGLE_API_KEY},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    names = [m.get("name", "") for m in data.get("models", [])]
-                    tts_models = [n for n in names if "tts" in n.lower()]
-                    print(f"[startup] GOOGLE_API_KEY is VALID. {len(names)} models visible. TTS models: {tts_models}", flush=True)
-                else:
-                    body = await resp.text()
-                    print(f"[startup] GOOGLE_API_KEY check FAILED — HTTP {resp.status}: {body[:300]}", flush=True)
-    except Exception as e:
-        print(f"[startup] GOOGLE_API_KEY check errored: {e}", flush=True)
+// NOTE: business/customer/conversation resolution used to live in a
+// separate resolveCallContext() helper, called before the Gemini request.
+// It's now inlined directly in handleVoiceProcess below: only the business
+// lookup blocks the Gemini call (that's the only piece it actually needs);
+// customer/conversation/call-record creation runs concurrently with the
+// Gemini call instead, since nothing needs those IDs until after the reply
+// comes back (saveNote/setTag/pingOwner/the response to Python).
 
+// ============================================
+// /voice/process
+// Pipecat's bridge POSTs here on every caller turn (camelCase keys,
+// matching app.py exactly), with the FULL transcript held in ITS OWN
+// memory, not our database, per the locked plan, voice turns never touch
+// the messages table. We rebuild context the same way WhatsApp.js/
+// Instagram.js do, but pass Pipecat's transcript directly as
+// recentMessages instead of calling getRecentMessages.
+// ============================================
 
-@app.on_event("startup")
-async def verify_deepgram_key():
-    """Hit Deepgram's actual transcription endpoint with a tiny public sample
-    URL — this only needs the same usage:write permission a real STT
-    connection needs, unlike /v1/auth/grant which requires Member+ scope
-    and can 403 even on a perfectly usable transcription key."""
-    if not DEEPGRAM_API_KEY:
-        return
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.deepgram.com/v1/listen",
-                headers={
-                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={"url": "https://dpgr.am/spacewalk.wav"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                body = await resp.text()
-                if resp.status == 200:
-                    print(f"[startup] DEEPGRAM_API_KEY is VALID (transcription succeeded).", flush=True)
-                else:
-                    print(f"[startup] DEEPGRAM_API_KEY check FAILED — HTTP {resp.status}: {body[:300]}", flush=True)
-    except Exception as e:
-        print(f"[startup] DEEPGRAM_API_KEY check errored: {e}", flush=True)
+async function handleVoiceProcess(req, res) {
+  const requestReceivedAt = Date.now();
+  const {
+    callSid,
+    from: fromNumber,
+    to: toNumber,
+    text,
+    transcript,
+    conversationId: cachedConversationId,
+    businessId: cachedBusinessId,
+    customerId: cachedCustomerId,
+  } = req.body;
 
+  if (!callSid) {
+    return res.status(400).json({ error: 'Missing callSid' });
+  }
 
-@app.post("/voice")
-async def voice_webhook(request: Request):
-    """
-    Twilio's 'A call comes in' webhook. Returns TwiML instructing Twilio
-    to open a Media Stream to our /ws websocket endpoint.
+  const isCachedTurn = !!(cachedConversationId && cachedBusinessId && cachedCustomerId);
 
-    Twilio's Media Streams 'start' event does NOT include From/To natively
-    (confirmed against Twilio docs) — so we pass them through explicitly as
-    <Parameter> tags, which Twilio delivers back inside start.customParameters.
-    """
-    form = await request.form()
-    from_number = form.get("From", "")
-    to_number = form.get("To", "")
-    call_sid = form.get("CallSid", "")
+  let businessId, conversationId, customerId;
+  let identityPromise = null;  // resolves to {conversationId, customerId} in background on turn 1
 
-    host = request.url.hostname  # e.g. qantu-1.onrender.com
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect>
-        <Stream url="wss://{host}/ws">
-            <Parameter name="From" value="{from_number}" />
-            <Parameter name="To" value="{to_number}" />
-            <Parameter name="CallSid" value="{call_sid}" />
-        </Stream>
-    </Connect>
-</Response>"""
-    return Response(content=twiml, media_type="application/xml")
+  if (isCachedTurn) {
+    // Every turn after the first: IDs are already known, nothing to resolve.
+    businessId = cachedBusinessId;
+    conversationId = cachedConversationId;
+    customerId = cachedCustomerId;
+  } else {
+    // FIRST TURN: only block on the business lookup — that's the only
+    // thing the Gemini call actually needs. Customer/conversation
+    // identity isn't needed until we save a note/tag or return the IDs
+    // to Python, both of which happen AFTER processMessage below — so
+    // kick that resolution off now and let it run concurrently with the
+    // Gemini call instead of serializing in front of it.
+    const business = await getBusinessByTwilioNumber(toNumber);
+    if (!business) {
+      return res.json({ reply: "Sorry, this number isn't set up yet." });
+    }
+    businessId = business.id;
 
+    identityPromise = (async () => {
+      const t0 = Date.now();
+      const customer = await findOrCreateCustomer(business.id, 'call', fromNumber);
+      const t1 = Date.now();
+      const conversation = await getOrCreateActiveConversation(business.id, customer.id, 'call');
+      const t2 = Date.now();
+      const existingCall = await getCallBySid(callSid);
+      if (!existingCall) {
+        await createCall({
+          businessId: business.id,
+          conversationId: conversation.id,
+          callSid,
+          fromNumber,
+          toNumber,
+        });
+      }
+      const t3 = Date.now();
+      console.log(`[timing] background identity resolve — customer=${t1 - t0}ms conversation=${t2 - t1}ms callRecord=${t3 - t2}ms TOTAL=${t3 - t0}ms`);
+      return { conversationId: conversation.id, customerId: customer.id, business };
+    })();
+  }
 
-class DebugTap(FrameProcessor):
-    """Logs every frame passing through — specifically catches ErrorFrame
-    (which GeminiTTSService yields on failure instead of raising, so our
-    try/except around construction never sees it) and counts audio frames
-    to confirm whether TTS is actually producing output. Also used on the
-    INPUT side to confirm raw caller audio is actually reaching the
-    pipeline before Deepgram, since Deepgram's socket can be healthy
-    while never actually receiving audio."""
+  // First turn of this call: fetch business-scoped context once (in
+  // parallel) and cache it. Every later turn hits the cache instead of the
+  // database at all. Notes/tag are conversation-scoped though, and on turn
+  // 1 there's no conversationId yet — they're fetched after identityPromise
+  // resolves instead (see below), and folded into the same cache entry.
+  let ctx = callContextCache.get(callSid);
+  if (!ctx) {
+    const fetchStart = Date.now();
+    console.log(`[cache] MISS for callSid=${callSid} — fetching business context from DB`);
 
-    def __init__(self, label: str):
-        super().__init__()
-        self.label = label
-        self.audio_frame_count = 0
-        self.input_audio_count = 0
+    const [businessSettings, businessKnowledge] = await Promise.all([
+      getBusinessSettings(businessId),
+      getBusinessKnowledge(businessId),
+    ]);
 
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, ErrorFrame):
-            print(f"[{self.label}] ErrorFrame: {frame.error}", flush=True)
-        elif isinstance(frame, TTSAudioRawFrame):
-            self.audio_frame_count += 1
-            if self.audio_frame_count == 1:
-                print(f"[{self.label}] First TTSAudioRawFrame received — audio IS being generated", flush=True)
-        elif isinstance(frame, InputAudioRawFrame):
-            self.input_audio_count += 1
-            if self.input_audio_count == 1:
-                print(f"[{self.label}] First InputAudioRawFrame received — caller audio IS reaching the pipeline", flush=True)
-            if self.input_audio_count % 50 == 0:
-                print(f"[{self.label}] {self.input_audio_count} input audio frames received so far", flush=True)
-        elif isinstance(frame, TextFrame):
-            print(f"[{self.label}] TextFrame: {frame.text!r}", flush=True)
-        await self.push_frame(frame, direction)
+    // Empty/null placeholders for turn 1 — a brand new conversation has no
+    // notes or tag yet regardless, so this is never actually wrong data,
+    // just resolved properly once identityPromise lands (see below).
+    ctx = { businessSettings, businessKnowledge, notes: [], currentTag: null, isOwnerCalling: false, cachedAt: Date.now() };
+    callContextCache.set(callSid, ctx);
+    console.log(`[cache] Business context fetch took ${Date.now() - fetchStart}ms for callSid=${callSid}`);
+  } else {
+    console.log(`[cache] HIT for callSid=${callSid} — skipping DB entirely (cached ${Date.now() - ctx.cachedAt}ms ago)`);
+  }
 
+  const { businessSettings, businessKnowledge, notes, currentTag } = ctx;
 
-class NodeJSBridge(FrameProcessor):
-    """
-    Catches STT transcriptions, maintains the full in-memory transcript,
-    calls Node.js /voice/process for Gemini 3.6 reasoning, and pushes
-    the reply text into the Gemini 3.1 TTS pipeline.
-    """
+  const recentMessages = (transcript || []).map(t => ({
+    role: t.role === 'customer' ? 'customer' : 'assistant',
+    content: t.content,
+  }));
 
-    def __init__(self, api_url: str):
-        super().__init__()
-        self.api_url = api_url
-        self.transcript = []          # Pipecat's in-memory call log
-        self.meta = {}                # call_sid, from, to, conversation_id, etc.
-        self.silence_task = None      # asyncio task for the 3s greeting timer
-        self.generation = 0           # bumped on every new user turn — stale
-                                        # in-flight replies check this before
-                                        # being spoken, so a slow Node.js call
-                                        # from an old turn can't talk over a
-                                        # newer one
+  const context = {
+    businessSettings,
+    businessKnowledge,
+    notes,
+    recentMessages,
+    currentTag,
+    channelType: 'call',
+  };
 
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
+  const preGeminiMs = Date.now() - requestReceivedAt;
+  console.log(`[timing] callSid=${callSid} — Node.js overhead before Gemini call: ${preGeminiMs}ms`);
 
-        if isinstance(frame, StartFrame):
-            print("[bridge] StartFrame received, starting 3s silence timer", flush=True)
-            self.silence_task = asyncio.create_task(self._silence_timer())
-            await self.push_frame(frame, direction)
+  // Fire the Gemini call — on turn 1, identityPromise (customer/conversation/
+  // call record creation) is running concurrently in the background right
+  // now, not blocking this.
+  const result = await processMessage(context, text || '');
 
-        elif isinstance(frame, TranscriptionFrame):
-            print(f"[bridge] TranscriptionFrame received: {frame.text!r}", flush=True)
+  // Now join on identity resolution — by this point processMessage has
+  // taken 1-4+ seconds, so on turn 1 this should already be done or very
+  // close to it, essentially free to await here.
+  if (identityPromise) {
+    const identity = await identityPromise;
+    conversationId = identity.conversationId;
+    customerId = identity.customerId;
 
-            # New turn starts NOW — anything from an older turn still in
-            # flight (an earlier _call_nodejs call that hasn't returned yet)
-            # is now stale and will be dropped when it lands, see below.
-            self.generation += 1
-            my_generation = self.generation
+    // isOwnerCalling depends on customer/business both being resolved —
+    // compute it now and correct the cached ctx so later turns (which
+    // read isOwnerCalling from cache) get the right value.
+    const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(identity.business?.owner_contact);
+    ctx.isOwnerCalling = isOwnerCalling;
+    callContextCache.set(callSid, ctx);
+  }
 
-            # KILL SWITCH: the user is talking — immediately cancel any bot
-            # speech/TTS currently in flight or queued, before we even start
-            # the Node.js round-trip. Without this, old replies keep playing
-            # and queuing up behind each other while the user is ignored.
-            await self.push_interruption_task_frame_and_wait()
-            print("[bridge] Interruption pushed and acknowledged — killing any in-flight bot speech", flush=True)
+  if (result.save_note) {
+    await saveNote(conversationId, result.save_note);
+  }
 
-            # Cancel silence timer — caller spoke before timeout
-            if self.silence_task:
-                self.silence_task.cancel()
-                try:
-                    await self.silence_task
-                except asyncio.CancelledError:
-                    pass
-                self.silence_task = None
+  if (result.tag) {
+    await setTag(conversationId, result.tag);
+  }
 
-            text = frame.text.strip()
-            if not text:
-                await self.push_frame(frame, direction)
-                return
+  if (result.customer_name && customerId) {
+    await updateCustomerName(customerId, result.customer_name);
+  }
 
-            # Log caller turn and hit Node.js
-            self.transcript.append({"role": "customer", "content": text})
-            reply = await self._call_nodejs(text)
-            print(f"[bridge] Node.js reply for user text: {reply!r}", flush=True)
+  if (result.action === 'PING_OWNER' || result.action === 'HANDOFF') {
+    const business = await getBusinessByTwilioNumber(toNumber);
+    if (business && result.owner_summary) {
+      const label = result.action === 'HANDOFF' ? '⚠️ *Call Handoff*' : '📞 *Call Update*';
+      await pingOwner(business, `${label}\n\n${result.owner_summary}`, conversationId, customerId);
+    }
+    await updateConversationStatus(conversationId, result.action === 'HANDOFF' ? 'handed_off' : 'awaiting_owner');
+  }
 
-            # STALE CHECK: if the user spoke again while we were waiting on
-            # Node.js, self.generation has moved past my_generation. This
-            # reply is for a turn that's no longer current — drop it instead
-            # of pushing it to TTS, where it would talk over/after the newer
-            # turn and cause exactly the "sluggish, answers an old question"
-            # symptom.
-            if my_generation != self.generation:
-                print(f"[bridge] DROPPING stale reply (generation {my_generation}, now at {self.generation}): {reply!r}", flush=True)
-                return
+  res.json({
+    reply: result.reply,
+    conversationId,
+    businessId,
+    customerId,
+    action: result.action,
+  });
+}
 
-            if reply:
-                self.transcript.append({"role": "assistant", "content": reply})
-                await self.push_frame(TextFrame(reply), direction)
-                print("[bridge] Pushed TextFrame with reply downstream to TTS", flush=True)
-            else:
-                print("[bridge] No reply from Node.js — nothing pushed to TTS", flush=True)
+// ============================================
+// /voice/end
+// app.py's bridge POSTs the full transcript here once the call
+// disconnects. This is the ONLY point voice content gets permanently
+// written, one summary, saved in two places: calls.summary and
+// conversation_notes.
+// ============================================
 
-        else:
-            await self.push_frame(frame, direction)
+async function handleVoiceEnd(req, res) {
+  const { callSid, conversationId, transcript } = req.body;
 
-    # ── Silence timer: if caller says nothing for 3s, trigger greeting ──
-    async def _silence_timer(self):
-        my_generation = self.generation
-        try:
-            print("[bridge] Silence timer running — waiting 3s before greeting", flush=True)
-            await asyncio.sleep(3.0)
-            print("[bridge] Silence timer elapsed — calling Node.js for greeting", flush=True)
-            reply = await self._call_nodejs("")
-            print(f"[bridge] Node.js greeting reply: {reply!r}", flush=True)
+  if (!callSid) {
+    return res.status(400).json({ error: 'Missing callSid' });
+  }
 
-            if my_generation != self.generation:
-                print(f"[bridge] DROPPING stale greeting (generation {my_generation}, now at {self.generation}): {reply!r}", flush=True)
-                return
+  // Call is over — drop cached context for this callSid so the Map doesn't
+  // grow forever across the life of the Node.js process.
+  callContextCache.delete(callSid);
 
-            if reply:
-                self.transcript.append({"role": "assistant", "content": reply})
-                await self.push_frame(TextFrame(reply))
-                print("[bridge] Pushed greeting TextFrame downstream to TTS", flush=True)
-            else:
-                print("[bridge] No greeting reply from Node.js — nothing pushed to TTS", flush=True)
-        except asyncio.CancelledError:
-            print("[bridge] Silence timer cancelled (caller spoke first)", flush=True)
+  const call = await getCallBySid(callSid);
+  if (!call) {
+    console.error('No call record found for sid:', callSid);
+    return res.status(404).json({ error: 'Call not found' });
+  }
 
-    # ── POST to Node.js /voice/process ────────────────────────────────
-    async def _call_nodejs(self, text: str):
-        payload = {
-            "callSid": self.meta.get("call_sid"),
-            "from": self.meta.get("from"),
-            "to": self.meta.get("to"),
-            "text": text,
-            "transcript": self.transcript,
-            "conversationId": self.meta.get("conversation_id"),
-            "businessId": self.meta.get("business_id"),
-            "customerId": self.meta.get("customer_id"),
-        }
+  const summary = await summarizeCall(transcript || []);
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.api_url}/voice/process",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        # Cache IDs for subsequent turns
-                        self.meta["conversation_id"] = data.get("conversationId") or self.meta.get("conversation_id")
-                        self.meta["business_id"] = data.get("businessId") or self.meta.get("business_id")
-                        self.meta["customer_id"] = data.get("customerId") or self.meta.get("customer_id")
-                        return data.get("reply")
-                    else:
-                        print(f"Node.js returned {resp.status}")
-                        return "Sorry, I'm having trouble right now."
-        except Exception as e:
-            print(f"Error calling Node.js /voice/process: {e}")
-            return "Sorry, I'm having trouble right now."
+  await completeCall(callSid, { summary });
 
-    # ── POST to Node.js /voice/end ────────────────────────────────────
-    async def call_end(self):
-        payload = {
-            "callSid": self.meta.get("call_sid"),
-            "transcript": self.transcript,
-            "conversationId": self.meta.get("conversation_id"),
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"{self.api_url}/voice/end",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-        except Exception as e:
-            print(f"Error calling Node.js /voice/end: {e}")
+  const targetConversationId = conversationId || call.conversation_id;
+  if (targetConversationId) {
+    await saveNote(targetConversationId, summary);
+  }
 
+  if (call.business_id) {
+    const business = await getBusinessByTwilioNumber(call.to_number);
+    if (business && targetConversationId) {
+      const currentTag = await getTag(targetConversationId);
+      if (currentTag === 'needs_followup') {
+        await pingOwner(business, `📞 *Call Ended*\n\n${summary}`, targetConversationId, null);
+      }
+    }
+  }
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    import json
-    import traceback
+  console.log(`Call ${callSid} completed, summary saved: ${summary}`);
+  res.json({ status: 'ok', summary });
+}
 
-    print("[ws] Handler entered, accepting connection...", flush=True)
-    await websocket.accept()
-    print("[ws] Connection accepted, waiting for first message...", flush=True)
+async function summarizeCall(transcript) {
+  const axios = require('axios');
 
-    # Twilio sends a "connected" event first (handshake ack, no metadata),
-    # THEN a "start" event with the actual call metadata we need.
-    # Docs: https://www.twilio.com/docs/voice/media-streams/websocket-messages
-    start_msg = None
-    try:
-        for i in range(5):  # small bound so a malformed stream can't hang forever
-            raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
-            print(f"[ws] Raw message #{i}: {raw[:500]}", flush=True)
-            msg = json.loads(raw)
-            event = msg.get("event")
-            if event == "connected":
-                print("[ws] Received 'connected' handshake event, waiting for 'start'...", flush=True)
-                continue
-            if event == "start":
-                start_msg = msg
-                break
-            print(f"[ws] Unexpected event before 'start': {event}", flush=True)
-    except Exception as e:
-        print(f"[ws] Failed to receive/parse start event: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        await websocket.close()
-        return
+  if (!transcript || transcript.length === 0) {
+    return 'Call connected but no conversation took place.';
+  }
 
-    if start_msg is None:
-        print("[ws] Never received a 'start' event", flush=True)
-        await websocket.close()
-        return
+  const transcriptText = transcript.map(t => `${t.role}: ${t.content}`).join('\n');
 
-    try:
-        stream_sid = start_msg["start"]["streamSid"]
-        call_sid = start_msg["start"]["callSid"]
-        custom_params = start_msg["start"].get("customParameters", {})
-        from_number = custom_params.get("From", "")
-        to_number = custom_params.get("To", "")
-    except KeyError as e:
-        print(f"[ws] start event missing expected field: {e}. Payload: {start_msg}", flush=True)
-        await websocket.close()
-        return
+  const prompt = `Summarize this phone call for the business owner in 2-3 short sentences. Lead with what the caller wanted and what was resolved or left open. Write it the way you'd text a quick update to someone, not a formal report.\n\n${transcriptText}`;
 
-    print(f"[ws] Call started — call_sid={call_sid} from={from_number} to={to_number}", flush=True)
+  try {
+    const response = await axios.post(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY, 'Content-Type': 'application/json' } }
+    );
+    return response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Call completed, summary unavailable.';
+  } catch (err) {
+    console.error('Error summarizing call:', err.response?.data || err.message);
+    return 'Call completed, summary unavailable.';
+  }
+}
 
-
-
-    # ── Pipecat pipeline setup ──────────────────────────────────────
-    try:
-        transport = FastAPIWebsocketTransport(
-            websocket=websocket,
-            params=FastAPIWebsocketParams(
-                audio_in_enabled=True,   # CRITICAL — defaults to False. Without
-                                          # this, caller audio never reaches the
-                                          # pipeline at all (TTS output still
-                                          # works fine since that's audio_out).
-                audio_out_enabled=True,
-                add_wav_header=False,
-                vad_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),   # detects when the caller
-                vad_audio_passthrough=True,         # starts speaking, this is
-                                                      # what makes barge-in real
-                serializer=TwilioFrameSerializer(
-                    stream_sid=stream_sid,
-                    call_sid=call_sid,
-                    account_sid=TWILIO_ACCOUNT_SID,
-                    auth_token=TWILIO_AUTH_TOKEN,
-                ),
-            ),
-        )
-    except Exception as e:
-        print(f"[ws] TRANSPORT construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        await websocket.close()
-        return
-
-    # DEFAULT endpointing is only 10ms of silence (confirmed via Deepgram
-    # docs) — any brief pause mid-sentence gets treated as end-of-turn,
-    # fragmenting a single utterance into multiple separate TranscriptionFrames.
-    # Raising endpointing + adding utterance_end_ms (requires interim_results)
-    # gives Deepgram a real gap to wait for before finalizing, so "Eight...
-    # [pause]...sure I can message you on WhatsApp" doesn't get split into
-    # two separate bot turns.
-    try:
-        stt = DeepgramSTTService(
-            api_key=DEEPGRAM_API_KEY,
-            settings=DeepgramSTTSettings(
-                interim_results=True,       # required for utterance_end_ms
-                endpointing=500,             # ms of silence before finalizing
-                                              # (was defaulting to 10ms)
-                utterance_end_ms=1000,       # secondary, transcript-based
-                                              # end-of-utterance signal
-            ),
-        )
-    except Exception as e:
-        print(f"[ws] DEEPGRAM STT construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        await websocket.close()
-        return
-
-    # CONFIRMED against live pipecat-ai 1.4.0 source (services/google/tts.py):
-    # GeminiTTSService has NO api_key parameter — it requires a real GCP
-    # service account via credentials_path (or credentials as a JSON string).
-    # GOOGLE_CREDENTIALS_PATH points at a Render Secret File mount.
-    #
-    # text_aggregation_mode=TOKEN (confirmed real param on the TTSService base
-    # class, flows through **kwargs): by default TTSService buffers text with
-    # SimpleTextAggregator until a sentence boundary, firing one run_tts()
-    # network call PER SENTENCE — each with its own latency, which is why a
-    # 3-sentence reply played as "sentence... 1.4s pause... sentence...".
-    # TOKEN mode streams text through without sentence-splitting, so our
-    # single NodeJSBridge reply becomes one run_tts() call instead of several.
-    try:
-        tts = GeminiTTSService(
-            credentials_path=GOOGLE_CREDENTIALS_PATH,
-            location="us-central1",  # error showed locations/global — Vertex AI preview
-                                       # models often require a specific region instead
-            text_aggregation_mode=TextAggregationMode.TOKEN,
-            settings=GeminiTTSService.Settings(
-                model="gemini-3.1-flash-tts-preview",
-                voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
-                prompt="Speak with a warm Nigerian English accent. Keep the tone calm, measured, and professional — friendly but not overly enthusiastic or high-energy. Speak at a natural, unhurried pace, like a knowledgeable colleague having a relaxed conversation, not a salesperson."
-            )
-        )
-    except Exception as e:
-        print(f"[ws] GEMINI TTS construction failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        await websocket.close()
-        return
-
-    try:
-        bridge = NodeJSBridge(api_url=NODEJS_API_URL)
-        bridge.meta = {
-            "call_sid": call_sid,
-            "from": from_number,
-            "to": to_number,
-        }
-
-        debug_tap = DebugTap("tts-out")
-        input_debug_tap = DebugTap("audio-in")
-
-        pipeline = Pipeline([
-            transport.input(),
-            input_debug_tap,
-            stt,
-            bridge,
-            tts,
-            debug_tap,
-            transport.output(),
-        ])
-
-        task = PipelineTask(
-            pipeline,
-            params=PipelineParams(allow_interruptions=True),
-        )
-        runner = PipelineRunner()
-    except Exception as e:
-        print(f"[ws] PIPELINE ASSEMBLY failed for call_sid={call_sid}: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        await websocket.close()
-        return
-
-    # ── Run pipeline, guarantee /voice/end on disconnect ─────────────
-    try:
-        await runner.run(task)
-    except Exception as e:
-        print(f"[ws] Pipeline run failed for call_sid={call_sid}: {e}", flush=True)
-    finally:
-        await bridge.call_end()
+module.exports = { handleIncomingCall, handleVoiceProcess, handleVoiceEnd };
