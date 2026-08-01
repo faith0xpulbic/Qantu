@@ -18,6 +18,26 @@ const { processMessage } = require('../Bot');
 const { pingOwner, normalizePhone } = require('../WhatsApp');
 
 // ============================================
+// PER-CALL CONTEXT CACHE
+// businessSettings/businessKnowledge/notes/currentTag/isOwnerCalling don't
+// change mid-call — fetch once on the first /voice/process turn, then reuse
+// for every later turn in the same call instead of re-hitting the DB.
+// Keyed by callSid, cleared in handleVoiceEnd so it can't leak across calls.
+// ============================================
+const callContextCache = new Map();
+
+// Safety net: if /voice/end never fires for a call (crash, dropped
+// connection), its cache entry would otherwise sit forever. Sweep out
+// anything older than 30 minutes — no real call runs that long.
+const CALL_CONTEXT_MAX_AGE_MS = 30 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - CALL_CONTEXT_MAX_AGE_MS;
+  for (const [callSid, entry] of callContextCache) {
+    if (entry.cachedAt < cutoff) callContextCache.delete(callSid);
+  }
+}, 5 * 60 * 1000);
+
+// ============================================
 // /voice/incoming
 // Twilio hits this the moment a call connects. We don't create the
 // customer/conversation/call records here, app.py's bridge only has
@@ -56,7 +76,9 @@ async function handleIncomingCall(req, res) {
 // straight through instead of hitting the database again for lookup.
 async function resolveCallContext({ callSid, fromNumber, toNumber, conversationId, businessId, customerId }) {
   if (conversationId && businessId && customerId) {
-    return { conversationId, businessId, customerId };
+    // Cached path — no business object available here, caller will
+    // pass cachedContext through instead (see handleVoiceProcess).
+    return { conversationId, businessId, customerId, business: null };
   }
 
   const business = await getBusinessByTwilioNumber(toNumber);
@@ -83,6 +105,7 @@ async function resolveCallContext({ callSid, fromNumber, toNumber, conversationI
     conversationId: conversation.id,
     businessId: business.id,
     customerId: customer.id,
+    business,
   };
 }
 
@@ -127,18 +150,28 @@ async function handleVoiceProcess(req, res) {
 
   const { conversationId, businessId, customerId } = resolved;
 
-  const businessSettings = await getBusinessSettings(businessId);
-  const businessKnowledge = await getBusinessKnowledge(businessId);
+  // First turn of this call: fetch context once (in parallel) and cache it.
+  // Every later turn hits the cache instead of the database at all.
+  let ctx = callContextCache.get(callSid);
+  if (!ctx) {
+    // resolveCallContext only returns a `business` object on a fresh
+    // resolution (first turn) — on cached-ID turns it's null, but we won't
+    // reach here on a cached turn anyway since ctx would already be set.
+    const business = resolved.business || await getBusinessByTwilioNumber(toNumber);
+    const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(business?.owner_contact);
 
-  // If the caller is this business's own owner (same check WhatsApp.js uses
-  // for owner replies), skip notes/tag — that's accumulated history from
-  // past customer conversations, and the owner should get a fresh start,
-  // not be treated as a returning customer with baggage from prior calls.
-  const business = await getBusinessByTwilioNumber(toNumber);
-  const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(business?.owner_contact);
+    const [businessSettings, businessKnowledge, notes, currentTag] = await Promise.all([
+      getBusinessSettings(businessId),
+      getBusinessKnowledge(businessId),
+      isOwnerCalling ? Promise.resolve([]) : getNotes(conversationId),
+      isOwnerCalling ? Promise.resolve(null) : getTag(conversationId),
+    ]);
 
-  const notes = isOwnerCalling ? [] : await getNotes(conversationId);
-  const currentTag = isOwnerCalling ? null : await getTag(conversationId);
+    ctx = { businessSettings, businessKnowledge, notes, currentTag, isOwnerCalling, cachedAt: Date.now() };
+    callContextCache.set(callSid, ctx);
+  }
+
+  const { businessSettings, businessKnowledge, notes, currentTag } = ctx;
 
   const recentMessages = (transcript || []).map(t => ({
     role: t.role === 'customer' ? 'customer' : 'assistant',
@@ -200,6 +233,10 @@ async function handleVoiceEnd(req, res) {
   if (!callSid) {
     return res.status(400).json({ error: 'Missing callSid' });
   }
+
+  // Call is over — drop cached context for this callSid so the Map doesn't
+  // grow forever across the life of the Node.js process.
+  callContextCache.delete(callSid);
 
   const call = await getCallBySid(callSid);
   if (!call) {
