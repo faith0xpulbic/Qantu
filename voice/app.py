@@ -383,6 +383,8 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         tts = GeminiTTSService(
             credentials_path=GOOGLE_CREDENTIALS_PATH,
+            location="us-central1",  # error showed locations/global — Vertex AI preview
+                                       # models often require a specific region instead
             settings=GeminiTTSService.Settings(
                 model="gemini-3.1-flash-tts-preview",
                 voice="Aoede",  # One of 30 valid voices (GeminiTTSService.AVAILABLE_VOICES)
