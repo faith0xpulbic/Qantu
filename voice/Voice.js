@@ -71,43 +71,13 @@ async function handleIncomingCall(req, res) {
   `);
 }
 
-// Resolves business/customer/conversation/call the first time this call_sid
-// is seen, and creates the call record. Later turns pass the cached IDs
-// straight through instead of hitting the database again for lookup.
-async function resolveCallContext({ callSid, fromNumber, toNumber, conversationId, businessId, customerId }) {
-  if (conversationId && businessId && customerId) {
-    // Cached path — no business object available here, caller will
-    // pass cachedContext through instead (see handleVoiceProcess).
-    return { conversationId, businessId, customerId, business: null };
-  }
-
-  const business = await getBusinessByTwilioNumber(toNumber);
-  if (!business) {
-    console.error('No business found for Twilio number:', toNumber);
-    return null;
-  }
-
-  const customer = await findOrCreateCustomer(business.id, 'call', fromNumber);
-  const conversation = await getOrCreateActiveConversation(business.id, customer.id, 'call');
-
-  const existingCall = await getCallBySid(callSid);
-  if (!existingCall) {
-    await createCall({
-      businessId: business.id,
-      conversationId: conversation.id,
-      callSid,
-      fromNumber,
-      toNumber,
-    });
-  }
-
-  return {
-    conversationId: conversation.id,
-    businessId: business.id,
-    customerId: customer.id,
-    business,
-  };
-}
+// NOTE: business/customer/conversation resolution used to live in a
+// separate resolveCallContext() helper, called before the Gemini request.
+// It's now inlined directly in handleVoiceProcess below: only the business
+// lookup blocks the Gemini call (that's the only piece it actually needs);
+// customer/conversation/call-record creation runs concurrently with the
+// Gemini call instead, since nothing needs those IDs until after the reply
+// comes back (saveNote/setTag/pingOwner/the response to Python).
 
 // ============================================
 // /voice/process
@@ -136,44 +106,72 @@ async function handleVoiceProcess(req, res) {
     return res.status(400).json({ error: 'Missing callSid' });
   }
 
-  const resolved = await resolveCallContext({
-    callSid,
-    fromNumber,
-    toNumber,
-    conversationId: cachedConversationId,
-    businessId: cachedBusinessId,
-    customerId: cachedCustomerId,
-  });
+  const isCachedTurn = !!(cachedConversationId && cachedBusinessId && cachedCustomerId);
 
-  if (!resolved) {
-    return res.json({ reply: "Sorry, this number isn't set up yet." });
+  let businessId, conversationId, customerId;
+  let identityPromise = null;  // resolves to {conversationId, customerId} in background on turn 1
+
+  if (isCachedTurn) {
+    // Every turn after the first: IDs are already known, nothing to resolve.
+    businessId = cachedBusinessId;
+    conversationId = cachedConversationId;
+    customerId = cachedCustomerId;
+  } else {
+    // FIRST TURN: only block on the business lookup — that's the only
+    // thing the Gemini call actually needs. Customer/conversation
+    // identity isn't needed until we save a note/tag or return the IDs
+    // to Python, both of which happen AFTER processMessage below — so
+    // kick that resolution off now and let it run concurrently with the
+    // Gemini call instead of serializing in front of it.
+    const business = await getBusinessByTwilioNumber(toNumber);
+    if (!business) {
+      return res.json({ reply: "Sorry, this number isn't set up yet." });
+    }
+    businessId = business.id;
+
+    identityPromise = (async () => {
+      const t0 = Date.now();
+      const customer = await findOrCreateCustomer(business.id, 'call', fromNumber);
+      const t1 = Date.now();
+      const conversation = await getOrCreateActiveConversation(business.id, customer.id, 'call');
+      const t2 = Date.now();
+      const existingCall = await getCallBySid(callSid);
+      if (!existingCall) {
+        await createCall({
+          businessId: business.id,
+          conversationId: conversation.id,
+          callSid,
+          fromNumber,
+          toNumber,
+        });
+      }
+      const t3 = Date.now();
+      console.log(`[timing] background identity resolve — customer=${t1 - t0}ms conversation=${t2 - t1}ms callRecord=${t3 - t2}ms TOTAL=${t3 - t0}ms`);
+      return { conversationId: conversation.id, customerId: customer.id, business };
+    })();
   }
 
-  const { conversationId, businessId, customerId } = resolved;
-
-  // First turn of this call: fetch context once (in parallel) and cache it.
-  // Every later turn hits the cache instead of the database at all.
+  // First turn of this call: fetch business-scoped context once (in
+  // parallel) and cache it. Every later turn hits the cache instead of the
+  // database at all. Notes/tag are conversation-scoped though, and on turn
+  // 1 there's no conversationId yet — they're fetched after identityPromise
+  // resolves instead (see below), and folded into the same cache entry.
   let ctx = callContextCache.get(callSid);
   if (!ctx) {
     const fetchStart = Date.now();
-    console.log(`[cache] MISS for callSid=${callSid} — fetching context from DB`);
+    console.log(`[cache] MISS for callSid=${callSid} — fetching business context from DB`);
 
-    // resolveCallContext only returns a `business` object on a fresh
-    // resolution (first turn) — on cached-ID turns it's null, but we won't
-    // reach here on a cached turn anyway since ctx would already be set.
-    const business = resolved.business || await getBusinessByTwilioNumber(toNumber);
-    const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(business?.owner_contact);
-
-    const [businessSettings, businessKnowledge, notes, currentTag] = await Promise.all([
+    const [businessSettings, businessKnowledge] = await Promise.all([
       getBusinessSettings(businessId),
       getBusinessKnowledge(businessId),
-      isOwnerCalling ? Promise.resolve([]) : getNotes(conversationId),
-      isOwnerCalling ? Promise.resolve(null) : getTag(conversationId),
     ]);
 
-    ctx = { businessSettings, businessKnowledge, notes, currentTag, isOwnerCalling, cachedAt: Date.now() };
+    // Empty/null placeholders for turn 1 — a brand new conversation has no
+    // notes or tag yet regardless, so this is never actually wrong data,
+    // just resolved properly once identityPromise lands (see below).
+    ctx = { businessSettings, businessKnowledge, notes: [], currentTag: null, isOwnerCalling: false, cachedAt: Date.now() };
     callContextCache.set(callSid, ctx);
-    console.log(`[cache] Fetch + cache took ${Date.now() - fetchStart}ms for callSid=${callSid}`);
+    console.log(`[cache] Business context fetch took ${Date.now() - fetchStart}ms for callSid=${callSid}`);
   } else {
     console.log(`[cache] HIT for callSid=${callSid} — skipping DB entirely (cached ${Date.now() - ctx.cachedAt}ms ago)`);
   }
@@ -197,7 +195,26 @@ async function handleVoiceProcess(req, res) {
   const preGeminiMs = Date.now() - requestReceivedAt;
   console.log(`[timing] callSid=${callSid} — Node.js overhead before Gemini call: ${preGeminiMs}ms`);
 
+  // Fire the Gemini call — on turn 1, identityPromise (customer/conversation/
+  // call record creation) is running concurrently in the background right
+  // now, not blocking this.
   const result = await processMessage(context, text || '');
+
+  // Now join on identity resolution — by this point processMessage has
+  // taken 1-4+ seconds, so on turn 1 this should already be done or very
+  // close to it, essentially free to await here.
+  if (identityPromise) {
+    const identity = await identityPromise;
+    conversationId = identity.conversationId;
+    customerId = identity.customerId;
+
+    // isOwnerCalling depends on customer/business both being resolved —
+    // compute it now and correct the cached ctx so later turns (which
+    // read isOwnerCalling from cache) get the right value.
+    const isOwnerCalling = normalizePhone(fromNumber) === normalizePhone(identity.business?.owner_contact);
+    ctx.isOwnerCalling = isOwnerCalling;
+    callContextCache.set(callSid, ctx);
+  }
 
   if (result.save_note) {
     await saveNote(conversationId, result.save_note);
