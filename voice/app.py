@@ -163,11 +163,12 @@ class NodeJSBridge(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, StartFrame):
-            # Call connected — start silence timer for "hello" greeting
+            print("[bridge] StartFrame received, starting 3s silence timer", flush=True)
             self.silence_task = asyncio.create_task(self._silence_timer())
             await self.push_frame(frame, direction)
 
         elif isinstance(frame, TranscriptionFrame):
+            print(f"[bridge] TranscriptionFrame received: {frame.text!r}", flush=True)
             # Cancel silence timer — caller spoke before timeout
             if self.silence_task:
                 self.silence_task.cancel()
@@ -185,10 +186,14 @@ class NodeJSBridge(FrameProcessor):
             # Log caller turn and hit Node.js
             self.transcript.append({"role": "customer", "content": text})
             reply = await self._call_nodejs(text)
+            print(f"[bridge] Node.js reply for user text: {reply!r}", flush=True)
 
             if reply:
                 self.transcript.append({"role": "assistant", "content": reply})
                 await self.push_frame(TextFrame(reply), direction)
+                print("[bridge] Pushed TextFrame with reply downstream to TTS", flush=True)
+            else:
+                print("[bridge] No reply from Node.js — nothing pushed to TTS", flush=True)
 
         else:
             await self.push_frame(frame, direction)
@@ -196,8 +201,11 @@ class NodeJSBridge(FrameProcessor):
     # ── Silence timer: if caller says nothing for 3s, trigger greeting ──
     async def _silence_timer(self):
         try:
+            print("[bridge] Silence timer running — waiting 3s before greeting", flush=True)
             await asyncio.sleep(3.0)
+            print("[bridge] Silence timer elapsed — calling Node.js for greeting", flush=True)
             reply = await self._call_nodejs("")
+            print(f"[bridge] Node.js greeting reply: {reply!r}", flush=True)
             if reply:
                 self.transcript.append({"role": "assistant", "content": reply})
                 await self.push_frame(TextFrame(reply))
