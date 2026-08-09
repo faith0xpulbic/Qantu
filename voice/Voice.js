@@ -323,13 +323,19 @@ module.exports = { handleIncomingCall, handleVoiceProcess, handleVoiceEnd, handl
 // ============================================
 // /voice/preview-prompt (debug/tuning tool — not part of the live call or
 // message path)
-// Usage: GET /voice/preview-prompt?toNumber=+12184963163&channelType=call
-// channelType is optional — omit it (or pass anything other than "call")
-// to see the WhatsApp/Instagram variant instead.
-// Fetches real businessSettings/businessKnowledge for the business that
-// owns toNumber, plus any existing notes/tag if you also pass
-// conversationId, and returns the exact system prompt Bot.js would send —
-// everything except the actual conversation transcript.
+// Usage: GET /voice/preview-prompt?toNumber=+12184963163
+//        GET /voice/preview-prompt?toNumber=+12184963163&channelType=call
+//
+// One shared prompt across WhatsApp/Instagram/calls — SYSTEM_PROMPT +
+// business settings + business knowledge are identical everywhere.
+// channelType=call is the one real content difference (VOICE_CALL_ADDENDUM,
+// the phone-specific behavior rules) — pass it to see that variant, omit it
+// for the WhatsApp/Instagram version.
+//
+// Customer/conversation content (notes, tag, transcript) is intentionally
+// NEVER fetched here — it's shown as an explicit empty placeholder, since
+// this tool is for tuning the fixed business-level prompt, not inspecting
+// a real conversation.
 // ============================================
 async function handlePreviewPrompt(req, res) {
   // Simple shared-secret gate — this exposes internal business prompt
@@ -352,7 +358,7 @@ async function handlePreviewPrompt(req, res) {
     return res.status(401).json({ error: 'Missing or incorrect x-debug-key header' });
   }
 
-  const { toNumber, channelType, conversationId } = req.query;
+  const { toNumber, channelType } = req.query;
 
   if (!toNumber) {
     return res.status(400).json({ error: 'Pass ?toNumber=+1234567890 (the business\'s number) as a query param' });
@@ -363,12 +369,15 @@ async function handlePreviewPrompt(req, res) {
     return res.status(404).json({ error: `No business found for number: ${toNumber}` });
   }
 
-  const [businessSettings, businessKnowledge, notes, currentTag] = await Promise.all([
+  const [businessSettings, businessKnowledge] = await Promise.all([
     getBusinessSettings(business.id),
     getBusinessKnowledge(business.id),
-    conversationId ? getNotes(conversationId) : Promise.resolve([]),
-    conversationId ? getTag(conversationId) : Promise.resolve(null),
   ]);
+
+  // Explicit empty placeholders — customer conversation content is never
+  // part of this preview, regardless of platform.
+  const notes = [];
+  const currentTag = null;
 
   const preview = await previewPrompt({
     businessSettings,
@@ -380,6 +389,7 @@ async function handlePreviewPrompt(req, res) {
 
   res.json({
     businessName: business.name,
+    customerConversation: '(excluded — this preview always shows the business-level prompt only, not a real conversation)',
     ...preview,
   });
 }
