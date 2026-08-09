@@ -14,7 +14,7 @@ const {
   setTag,
   updateCustomerName,
 } = require('../Database');
-const { processMessage } = require('../Bot');
+const { processMessage, previewPrompt } = require('../Bot');
 const { pingOwner, normalizePhone } = require('../WhatsApp');
 
 // ============================================
@@ -318,4 +318,68 @@ async function summarizeCall(transcript) {
   }
 }
 
-module.exports = { handleIncomingCall, handleVoiceProcess, handleVoiceEnd };
+module.exports = { handleIncomingCall, handleVoiceProcess, handleVoiceEnd, handlePreviewPrompt };
+
+// ============================================
+// /voice/preview-prompt (debug/tuning tool — not part of the live call or
+// message path)
+// Usage: GET /voice/preview-prompt?toNumber=+12184963163&channelType=call
+// channelType is optional — omit it (or pass anything other than "call")
+// to see the WhatsApp/Instagram variant instead.
+// Fetches real businessSettings/businessKnowledge for the business that
+// owns toNumber, plus any existing notes/tag if you also pass
+// conversationId, and returns the exact system prompt Bot.js would send —
+// everything except the actual conversation transcript.
+// ============================================
+async function handlePreviewPrompt(req, res) {
+  // Simple shared-secret gate — this exposes internal business prompt
+  // content, so it shouldn't sit open on the public Render URL. Set
+  // DEBUG_PROMPT_KEY in your environment, then pass it as a header:
+  //   curl -H "x-debug-key: YOUR_KEY" "https://qantu.onrender.com/voice/preview-prompt?..."
+  const expectedKey = process.env.DEBUG_PROMPT_KEY;
+  if (!expectedKey) {
+    console.error('DEBUG_PROMPT_KEY not set — refusing to serve /voice/preview-prompt');
+    return res.status(503).json({ error: 'This endpoint is not configured. Set DEBUG_PROMPT_KEY.' });
+  }
+
+  const providedKey = req.get('x-debug-key') || '';
+  const crypto = require('crypto');
+  const expectedBuf = Buffer.from(expectedKey);
+  const providedBuf = Buffer.from(providedKey);
+  const isValid = expectedBuf.length === providedBuf.length && crypto.timingSafeEqual(expectedBuf, providedBuf);
+
+  if (!isValid) {
+    return res.status(401).json({ error: 'Missing or incorrect x-debug-key header' });
+  }
+
+  const { toNumber, channelType, conversationId } = req.query;
+
+  if (!toNumber) {
+    return res.status(400).json({ error: 'Pass ?toNumber=+1234567890 (the business\'s number) as a query param' });
+  }
+
+  const business = await getBusinessByTwilioNumber(toNumber);
+  if (!business) {
+    return res.status(404).json({ error: `No business found for number: ${toNumber}` });
+  }
+
+  const [businessSettings, businessKnowledge, notes, currentTag] = await Promise.all([
+    getBusinessSettings(business.id),
+    getBusinessKnowledge(business.id),
+    conversationId ? getNotes(conversationId) : Promise.resolve([]),
+    conversationId ? getTag(conversationId) : Promise.resolve(null),
+  ]);
+
+  const preview = await previewPrompt({
+    businessSettings,
+    businessKnowledge,
+    notes,
+    currentTag,
+    channelType,
+  });
+
+  res.json({
+    businessName: business.name,
+    ...preview,
+  });
+}
