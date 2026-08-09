@@ -4,7 +4,7 @@ const bodyParser = require('body-parser');
 
 const { handleIncomingWhatsAppMessage } = require('./WhatsApp');
 const { handleIncomingInstagramMessage } = require('./Instagram');
-const { handleIncomingCall, handleVoiceProcess, handleVoiceEnd } = require('./voice/Voice');
+const { handleIncomingCall, handleVoiceProcess, handleVoiceEnd, handlePreviewPrompt } = require('./voice/Voice');
 
 const app = express();
 app.use(bodyParser.json());
@@ -72,6 +72,19 @@ app.post('/voice/end', async (req, res) => {
   } catch (err) {
     console.error('Error in /voice/end:', err);
     res.json({ ok: false });
+  }
+});
+
+// Debug/tuning tool — NOT part of the live call or message path. Returns
+// the exact system prompt Bot.js would send to Gemini for a business,
+// minus the actual conversation transcript, so you can read and tune it.
+// Usage: GET /voice/preview-prompt?toNumber=+12184963163&channelType=call
+app.get('/voice/preview-prompt', async (req, res) => {
+  try {
+    await handlePreviewPrompt(req, res);
+  } catch (err) {
+    console.error('Error in /voice/preview-prompt:', err);
+    res.status(500).json({ error: 'Failed to build prompt preview' });
   }
 });
 
