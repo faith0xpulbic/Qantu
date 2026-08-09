@@ -1,4 +1,3 @@
-
 const axios = require('axios');
 const { SYSTEM_PROMPT, VOICE_CALL_ADDENDUM } = require('./prompts');
 
@@ -106,6 +105,13 @@ async function processMessage(context, text, mediaUrl = null) {
 
   const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType);
 
+  // BUG FIX: this used to always use CALL_MODEL regardless of channel —
+  // processMessage is shared by voice calls AND WhatsApp/Instagram text,
+  // so that silently switched text channels to the fast/lite model too.
+  // Only calls are latency-sensitive enough to need it; text channels get
+  // the stronger model back, same as before the voice optimization work.
+  const activeModel = channelType === 'call' ? CALL_MODEL : MODEL;
+
   // Gemini's format: each turn is a 'content' object with role 'user' or
   // 'model' (not 'assistant'), and text lives inside a 'parts' array.
   const history = [];
@@ -152,19 +158,31 @@ async function processMessage(context, text, mediaUrl = null) {
       ...history,
       { role: 'user', parts: [{ text: userContent }] },
     ],
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: RESPONSE_SCHEMA,
-      // NOTE: temperature/top_p/top_k are deprecated on newer Gemini model
-      // generations per Google's own docs — the API ignores them now and
-      // will error on future generations, so they're intentionally left
-      // out here rather than carried over from the old gemini-3.6-flash config.
-      thinkingConfig: { thinkingLevel: 'minimal' },  // Google's documented
-                                                       // guidance for high-
-                                                       // throughput routing/
-                                                       // classification-style
-                                                       // tasks like this one
-    },
+    generationConfig: channelType === 'call'
+      ? {
+          responseMimeType: 'application/json',
+          responseSchema: RESPONSE_SCHEMA,
+          // temperature/top_p/top_k omitted intentionally: deprecated on
+          // gemini-3.5-flash-lite per Google's docs for that model line.
+          // Only applies here, on the call path — NOT confirmed for
+          // gemini-3.6-flash, so the text-channel branch below keeps it.
+          thinkingConfig: { thinkingLevel: 'minimal' },  // Google's documented
+                                                           // guidance for high-
+                                                           // throughput routing/
+                                                           // classification-style
+                                                           // tasks — appropriate
+                                                           // for low-latency call
+                                                           // turns, not necessarily
+                                                           // for WhatsApp/Instagram
+                                                           // reply quality
+        }
+      : {
+          responseMimeType: 'application/json',
+          responseSchema: RESPONSE_SCHEMA,
+          temperature: 0.7,  // restored for gemini-3.6-flash (WhatsApp/
+                              // Instagram) — original behavior before this
+                              // session's call-latency optimization work
+        },
   };
 
   // Rough payload size in characters — correlate with slow turns to see if
@@ -173,10 +191,10 @@ async function processMessage(context, text, mediaUrl = null) {
 
   try {
     const geminiStart = Date.now();
-    console.log(`[gemini] Sending request — model=${CALL_MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
+    console.log(`[gemini] Sending request — model=${activeModel}, channelType=${channelType}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
 
     const response = await axios.post(
-      `${GEMINI_URL}/${CALL_MODEL}:generateContent`,
+      `${GEMINI_URL}/${activeModel}:generateContent`,
       requestPayload,
       {
         headers: {
@@ -187,7 +205,7 @@ async function processMessage(context, text, mediaUrl = null) {
     );
 
     const geminiMs = Date.now() - geminiStart;
-    console.log(`[gemini] Response received — ${geminiMs}ms, model=${CALL_MODEL}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
+    console.log(`[gemini] Response received — ${geminiMs}ms, model=${activeModel}, channelType=${channelType}, historyTurns=${history.length}, payloadChars=${payloadSize}`);
 
     const rawText = response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
 
@@ -227,7 +245,25 @@ async function processMessage(context, text, mediaUrl = null) {
   }
 }
 
-module.exports = { processMessage, processOwnerMessage };
+module.exports = { processMessage, processOwnerMessage, previewPrompt };
+
+// ============================================
+// PROMPT PREVIEW — for tuning, not used in the live request path.
+// Returns exactly what buildSystemPrompt would send to Gemini for a given
+// business — SYSTEM_PROMPT, the voice addendum (if requested), business
+// settings, business knowledge, and notes/tag — everything EXCEPT the
+// actual conversation transcript (recentMessages), so you can read and
+// tune the fixed prompt content without needing a live call/chat.
+// ============================================
+async function previewPrompt({ businessSettings, businessKnowledge, notes, currentTag, channelType }) {
+  const prompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType);
+  return {
+    channelType: channelType || 'whatsapp/instagram (default — pass channelType=call for the call variant)',
+    modelThatWouldBeUsed: channelType === 'call' ? CALL_MODEL : MODEL,
+    fullSystemPrompt: prompt,
+    characterCount: prompt.length,
+  };
+}
 
 // ============================================
 // OWNER-FACING PATH WITH TOOL CALLING
