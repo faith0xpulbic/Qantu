@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { getCustomerTimeOfDay } = require('./timezone');
 const {
   getBusinessByWhatsAppPhoneNumberId,
   findOrCreateCustomer,
@@ -245,7 +246,7 @@ async function handleIncomingWhatsAppMessage(body) {
   const recentMessages = await getRecentMessages(conversation.id);
   const currentTag = await getTag(conversation.id);
 
-  const context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag };
+  const context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType: 'whatsapp', customerTimeOfDay: getCustomerTimeOfDay(fromNumber) };
   const result = await processMessage(context, text, mediaUrl);
 
   console.log(`Bot decision — action: ${result.action}`);
