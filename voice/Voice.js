@@ -16,6 +16,7 @@ const {
 } = require('../Database');
 const { processMessage, previewPrompt } = require('../Bot');
 const { pingOwner, normalizePhone } = require('../WhatsApp');
+const { getCustomerTimeOfDay } = require('../timezone');
 
 // ============================================
 // PER-CALL CONTEXT CACHE
@@ -190,6 +191,7 @@ async function handleVoiceProcess(req, res) {
     recentMessages,
     currentTag,
     channelType: 'call',
+    customerTimeOfDay: getCustomerTimeOfDay(fromNumber),
   };
 
   const preGeminiMs = Date.now() - requestReceivedAt;
