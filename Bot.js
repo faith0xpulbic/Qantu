@@ -51,7 +51,7 @@ const RESPONSE_SCHEMA = {
 // channelType switches in the voice-specific addendum when this is a call,
 // left out entirely for WhatsApp/Instagram so the text-channel prompt
 // stays exactly as it was.
-function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType) {
+function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType, customerTimeOfDay) {
   let prompt = SYSTEM_PROMPT;
 
   if (channelType === 'call') {
@@ -71,6 +71,14 @@ function buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTa
       .map(k => `[${k.category}]\n${k.content}`)
       .join('\n\n');
     prompt += `\n\nBUSINESS INFORMATION (use this to answer customer questions accurately):\n${knowledgeText}`;
+  }
+
+  // Only included when we could actually derive it from the customer's
+  // phone number's country code — never guessed or defaulted. This is a
+  // soft hint for matching a greeting register, not an instruction to
+  // originate a greeting — the customer leads.
+  if (customerTimeOfDay) {
+    prompt += `\n\nCUSTOMER'S LIKELY LOCAL TIME OF DAY: ${customerTimeOfDay} (a rough guess based on their phone number's country code, not precise).`;
   }
 
   if (notes && notes.length > 0) {
@@ -99,11 +107,11 @@ function formatGap(previousTimestamp, currentTimestamp) {
   return `[over a week later]`;
 }
 
-// context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType }
+// context = { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType, customerTimeOfDay }
 async function processMessage(context, text, mediaUrl = null) {
-  const { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType } = context;
+  const { businessSettings, businessKnowledge, notes, recentMessages, currentTag, channelType, customerTimeOfDay } = context;
 
-  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType);
+  const systemPrompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType, customerTimeOfDay);
 
   // BUG FIX: this used to always use CALL_MODEL regardless of channel —
   // processMessage is shared by voice calls AND WhatsApp/Instagram text,
@@ -254,12 +262,61 @@ module.exports = { processMessage, processOwnerMessage, previewPrompt };
 // settings, business knowledge, and notes/tag — everything EXCEPT the
 // actual conversation transcript (recentMessages), so you can read and
 // tune the fixed prompt content without needing a live call/chat.
+//
+// Each section is labeled with its actual source (file/function/table) so
+// it's traceable back to exactly what to edit. Logged to console as well
+// as returned, so it's visible in Render's log stream, not just the HTTP
+// response.
 // ============================================
 async function previewPrompt({ businessSettings, businessKnowledge, notes, currentTag, channelType }) {
+  const isCall = channelType === 'call';
   const prompt = buildSystemPrompt(businessSettings, businessKnowledge, notes, currentTag, channelType);
+  const model = isCall ? CALL_MODEL : MODEL;
+
+  const sections = [
+    {
+      section: 'SYSTEM_PROMPT',
+      source: 'prompts.js — SYSTEM_PROMPT constant (fixed, same for every business)',
+      content: SYSTEM_PROMPT,
+    },
+    {
+      section: 'VOICE_CALL_ADDENDUM',
+      source: isCall
+        ? 'prompts.js — VOICE_CALL_ADDENDUM constant (appended because channelType=call)'
+        : '(not included — only appended when channelType=call)',
+      content: isCall ? VOICE_CALL_ADDENDUM : null,
+    },
+    {
+      section: 'BUSINESS SETTINGS',
+      source: 'Supabase business_settings table — Database.js getBusinessSettings(businessId)',
+      content: businessSettings && Object.keys(businessSettings).length > 0 ? businessSettings : null,
+    },
+    {
+      section: 'BUSINESS INFORMATION',
+      source: 'Supabase business_knowledge table — Database.js getBusinessKnowledge(businessId)',
+      content: businessKnowledge && businessKnowledge.length > 0 ? businessKnowledge : null,
+    },
+    {
+      section: 'CONVERSATION NOTES',
+      source: 'Supabase conversation_notes table — Database.js getNotes(conversationId) — forced empty in this preview',
+      content: notes && notes.length > 0 ? notes : null,
+    },
+    {
+      section: 'CONVERSATION TAG',
+      source: 'conversations.tag column — Database.js getTag(conversationId) — forced null in this preview',
+      content: currentTag || 'none',
+    },
+  ];
+
+  console.log(`[prompt-preview] channelType=${channelType || 'whatsapp/instagram'} model=${model}`);
+  for (const s of sections) {
+    console.log(`[prompt-preview] SECTION: ${s.section} — SOURCE: ${s.source}`);
+  }
+
   return {
     channelType: channelType || 'whatsapp/instagram (default — pass channelType=call for the call variant)',
-    modelThatWouldBeUsed: channelType === 'call' ? CALL_MODEL : MODEL,
+    modelThatWouldBeUsed: model,
+    sections,
     fullSystemPrompt: prompt,
     characterCount: prompt.length,
   };
