@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { getCustomerTimeOfDay } = require('./timezone');
+const { delayForReply } = require('./replyDelay');
 const {
   getBusinessByWhatsAppPhoneNumberId,
   findOrCreateCustomer,
@@ -254,8 +255,9 @@ async function handleIncomingWhatsAppMessage(body) {
     console.log(`Owner summary content: ${result.owner_summary}`);
   }
 
-  await sendWhatsAppMessage(business, fromNumber, result.reply);
   await saveMessage(conversation.id, 'assistant', result.reply);
+  await delayForReply(result.reply);
+  await sendWhatsAppMessage(business, fromNumber, result.reply);
 
   if (result.save_note) {
     await saveNote(conversation.id, result.save_note);
