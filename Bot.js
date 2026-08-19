@@ -14,6 +14,32 @@ function cleanReply(text) {
     .trim();
 }
 
+// Real texters often skip the trailing period on a short message ("yeah
+// that works" not "yeah that works."). This randomizes whether a reply's
+// FINAL period gets dropped, so replies don't come out uniform.
+//
+// Deliberately narrow:
+// - Only touches a period, NEVER a question mark or exclamation mark —
+//   those carry real meaning and dropping one would change how the
+//   message reads, not just its texture.
+// - Only applies to short, single-sentence replies (no internal ./!/?
+//   before the final one) — stripping the period on a longer, multi-
+//   sentence reply reads as a mistake, not natural texting.
+// - ~50/50 by default, tunable via the second argument.
+function maybeDropTrailingPeriod(text, dropProbability = 0.5) {
+  if (!text) return text;
+
+  const trimmed = text.trim();
+  if (!trimmed.endsWith('.')) return trimmed;  // nothing to drop
+
+  const withoutFinal = trimmed.slice(0, -1);
+  // If there's still a ./!/? earlier in the string, this is a multi-
+  // sentence reply — leave the final period alone.
+  if (/[.!?]/.test(withoutFinal)) return trimmed;
+
+  return Math.random() < dropProbability ? withoutFinal : trimmed;
+}
+
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 // In-call voice turns: mostly "read business context, respond in fixed JSON
 // schema" — low reasoning complexity, high volume, latency-sensitive.
@@ -273,8 +299,11 @@ async function processMessage(context, text, mediaUrl = null) {
         console.log(`[gemini-thought] strategy: ${parsed.thought.strategy}`);
       }
 
+      const cleaned = cleanReply(parsed.reply);
+      const finalReply = cleaned ? maybeDropTrailingPeriod(cleaned) : "Thanks for your message, let me get back to you shortly.";
+
       return {
-        reply: cleanReply(parsed.reply) || "Thanks for your message, let me get back to you shortly.",
+        reply: finalReply,
         action: parsed.action || 'NONE',
         action_reason: parsed.action_reason || null,
         owner_summary: parsed.owner_summary || null,
