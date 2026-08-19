@@ -44,6 +44,50 @@ const RESPONSE_SCHEMA = {
   required: ['reply', 'action'],
 };
 
+// Text-channel only (WhatsApp/Instagram) — same as RESPONSE_SCHEMA, but with
+// a `thought` object inserted BEFORE `reply`. Gemini fills schema fields in
+// order, so `thought` is generated first and becomes part of the model's
+// own context by the time it writes `reply` — structured reasoning before
+// the final answer, in the same single call, not a second request.
+// Never used for calls: the extra output tokens and reasoning step aren't
+// worth the latency cost on a live phone call.
+const TEXT_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    thought: {
+      type: 'object',
+      description: 'Think through your response before writing it. Not shown to the customer.',
+      properties: {
+        context: {
+          type: 'string',
+          description: 'What has actually happened in this conversation so far, stated plainly. No interpretation, just the facts of where things stand.',
+        },
+        customer_state: {
+          type: 'string',
+          description: "This customer's mood, urgency, and how much they've said. What does their message signal right now?",
+        },
+        tone_match: {
+          type: 'string',
+          description: "The customer's own message length, energy, and formality in this message, to be mirrored in the reply.",
+        },
+        strategy: {
+          type: 'string',
+          description: 'In one line: what should this specific reply accomplish?',
+        },
+      },
+      required: ['context', 'customer_state', 'tone_match', 'strategy'],
+    },
+    reply: { type: 'string' },
+    action: { type: 'string', enum: ['NONE', 'PING_OWNER', 'HANDOFF'] },
+    action_reason: { type: 'string', nullable: true },
+    owner_summary: { type: 'string', nullable: true },
+    save_note: { type: 'string', nullable: true },
+    tag: { type: 'string', enum: ['needs_followup', 'none'], nullable: true },
+    customer_name: { type: 'string', nullable: true },
+  },
+  required: ['thought', 'reply', 'action'],
+};
+
 // Builds the final system prompt by injecting this business's settings,
 // its factual knowledge, the bot's own notes, and the conversation's
 // current tag, so it can decide whether to keep, clear, or change it
@@ -186,7 +230,9 @@ async function processMessage(context, text, mediaUrl = null) {
         }
       : {
           responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
+          responseSchema: TEXT_RESPONSE_SCHEMA,  // includes `thought`, ahead
+                                                    // of `reply` in field order
+                                                    // — text channels only
           temperature: 0.7,  // restored for gemini-3.6-flash (WhatsApp/
                               // Instagram) — original behavior before this
                               // session's call-latency optimization work
@@ -219,6 +265,13 @@ async function processMessage(context, text, mediaUrl = null) {
 
     try {
       const parsed = JSON.parse(rawText);
+
+      if (parsed.thought) {
+        console.log(`[gemini-thought] context: ${parsed.thought.context}`);
+        console.log(`[gemini-thought] customer_state: ${parsed.thought.customer_state}`);
+        console.log(`[gemini-thought] tone_match: ${parsed.thought.tone_match}`);
+        console.log(`[gemini-thought] strategy: ${parsed.thought.strategy}`);
+      }
 
       return {
         reply: cleanReply(parsed.reply) || "Thanks for your message, let me get back to you shortly.",
